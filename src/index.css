@@ -1,0 +1,161 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --bg: #F4F6F8;
+  --ink: #0F2030;
+  --teal: #2BA9C7;
+  --teal-soft: #F2F9FB;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--ink);
+  background: var(--bg);
+  font-feature-settings: 'ss01' on, 'cv11' on;
+  letter-spacing: -0.005em;
+}
+
+.wb-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #92A0AC;
+}
+
+input::placeholder { color: #B0BBC6; }
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: #D7DEE5; border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ───────── Motion ───────── */
+@keyframes wb-fade-up {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes wb-fade {
+  from { opacity: 0; } to { opacity: 1; }
+}
+@keyframes wb-scale-in {
+  from { opacity: 0; transform: scale(0.97) translate3d(0, 4px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes wb-toast-in {
+  from { opacity: 0; transform: translate3d(0, 18px, 0) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes wb-pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: .55; transform: scale(.85); }
+}
+
+.wb-enter    { animation: wb-fade-up .35s var(--ease) both; }
+.wb-fade-in  { animation: wb-fade    .25s var(--ease) both; }
+.wb-modal-in { animation: wb-scale-in .25s var(--ease) both; }
+.wb-toast-in { animation: wb-toast-in .35s var(--ease) both; }
+
+.wb-lift {
+  transition: transform .25s var(--ease), box-shadow .25s var(--ease), border-color .25s var(--ease);
+  will-change: transform;
+}
+.wb-lift:hover {
+  transform: translate3d(0, -2px, 0);
+  box-shadow: 0 14px 30px -18px rgba(15,42,59,.18);
+  border-color: #D9E1E8 !important;
+}
+
+.wb-press { transition: transform .15s var(--ease), filter .15s var(--ease); }
+.wb-press:active { transform: scale(0.97); filter: brightness(.96); }
+
+/* Sidebar nav — selected pill + animated dot */
+.wb-nav {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 10px 12px; border-radius: 10px; border: none; cursor: pointer;
+  text-align: left; background: transparent; color: #5C6B78;
+  font-size: 13.5px; font-weight: 500; letter-spacing: -.005em;
+  position: relative;
+  transition: background .2s var(--ease), color .2s var(--ease);
+}
+.wb-nav:hover { background: #F4F6F8; color: #0F2030; }
+.wb-nav[data-active="true"] {
+  background: #F2F9FB;
+  color: #163A52;
+  font-weight: 600;
+}
+.wb-nav[data-active="true"]::after {
+  content: ""; position: absolute; left: -16px; top: 50%; transform: translateY(-50%);
+  width: 6px; height: 6px; border-radius: 50%; background: var(--teal);
+  box-shadow: 0 0 0 4px #F2F9FB;
+  animation: wb-pulse-dot 2.6s var(--ease) infinite;
+}
+
+/* Search input shortcut chip */
+.wb-kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid #E6EAEE; background: #F4F6F8; color: #5C6B78;
+  font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 6px;
+  letter-spacing: .04em;
+}
+
+/* Sidebar: fixed drawer on small screens */
+@media (max-width: 900px) {
+  .wb-sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0;
+    transform: translateX(-100%);
+    transition: transform .25s ease;
+    box-shadow: 0 24px 60px -18px rgba(15,42,59,.3);
+  }
+  .wb-sidebar[data-open="true"] { transform: translateX(0); }
+  .wb-burger { display: inline-flex !important; }
+}
+
+@media (max-width: 640px) {
+  .wb-hide-sm { display: none !important; }
+}
+
+/* Login responsive */
+@media (max-width: 900px) {
+  .wb-login-shell { grid-template-columns: 1fr !important; }
+  .wb-login-brand { padding: 36px 28px !important; min-height: 260px; }
+  .wb-login-form  { padding: 40px 28px !important; }
+}
+
+/* ---------- Print: only the invoice/tag sheet ---------- */
+@media print {
+  body * { visibility: hidden !important; }
+  .wb-invoice-overlay, .wb-invoice-overlay * { visibility: visible !important; }
+  .wb-invoice-overlay {
+    position: absolute !important;
+    inset: 0 !important;
+    background: #fff !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+  .wb-invoice-card {
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: none !important;
+    page-break-inside: auto;
+  }
+  .wb-no-print { display: none !important; }
+  .wb-print-area { overflow: visible !important; padding: 18px !important; }
+  .wb-tag {
+    border: 1px solid #000 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+}

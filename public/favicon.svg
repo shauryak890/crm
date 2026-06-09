@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#163A52"/>
+  <!-- hook -->
+  <path d="M32 14c0-3 2.5-5.5 5.5-5.5S43 11 43 14" stroke="#2BA9C7" stroke-width="3" stroke-linecap="round" fill="none"/>
+  <path d="M32 14v4" stroke="#2BA9C7" stroke-width="3" stroke-linecap="round"/>
+  <!-- hanger triangle -->
+  <path d="M32 18 11 38c-1.6 1.6-.6 3 1 3.3l20 4.5 20-4.5c1.6-.3 2.6-1.7 1-3.3L32 18Z" fill="#FFFFFF"/>
+  <!-- teal swoosh under -->
+  <path d="M10 44c7-4 15-5.5 24-3 7 2 13 5 19 8-9-2.5-18-3.5-26-1.6-8 1.9-13.5 1.6-17-3.4Z" fill="#2BA9C7"/>
+  <!-- sparkle -->
+  <circle cx="44" cy="46" r="2" fill="#FFFFFF"/>
+  <circle cx="38" cy="49" r="1.2" fill="#FFFFFF" opacity=".85"/>
+</svg>
