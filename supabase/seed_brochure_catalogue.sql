@@ -1,2 +1,0 @@
-Failed to run sql query: ERROR:  23502: null value in column "outlet_id" of relation "products" violates not-null constraint
-DETAIL:  Failing row contains (23201bd5-cbe2-4749-a8af-800c8faad585, Wash & Fold, 80.00, Laundry, t, 2026-06-09 13:48:25.431457+00, kg, null).
