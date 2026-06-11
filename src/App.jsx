@@ -26,6 +26,7 @@ import Catalogue from "./pages/Catalogue";
 import Construction from "./pages/Construction";
 import Invoice from "./components/Invoice";
 import DeliveryAlert from "./components/DeliveryAlert";
+import HQPanel from "./pages/hq/HQPanel";
 
 const NAV = [
   { section: "Operations", items: [
@@ -105,6 +106,16 @@ export default function App() {
   const [invoiceOrder, setInvoiceOrder] = useState(null);
   const [focusMode, setFocusMode] = useState(false);
 
+  // HQ is reached only via the URL hash #hq — there is no button or nav
+  // link anywhere in the app. Even with the hash, it only opens for a
+  // super_admin (and the database RLS independently enforces that).
+  const [hash, setHash] = useState(() => (typeof window !== "undefined" ? window.location.hash : ""));
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
   // Exit focus when leaving POS or when the user hits Escape.
   useEffect(() => { if (view !== "pos") setFocusMode(false); }, [view]);
   useEffect(() => {
@@ -147,6 +158,25 @@ export default function App() {
   if (!isConfigured) return <ConfigNeeded />;
   if (!authReady) return <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: C.textMute }}>Loading…</div>;
   if (!session) return <Login />;
+
+  // ── HQ gate ─────────────────────────────────────────────────────────
+  // Open the corporate HQ panel only when the URL hash is #hq AND the
+  // signed-in user is a super_admin. Anyone else who types #hq is bounced
+  // straight back to the normal app — they never even see it exists.
+  const wantsHQ = hash === "#hq" || hash === "#/hq";
+  if (wantsHQ) {
+    // Still resolving the profile? Hold with a spinner rather than flashing.
+    if (!profile) {
+      return <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: C.textMute }}>Loading…</div>;
+    }
+    if (profile.role === "super_admin") {
+      return <HQPanel profile={profile} onExit={() => { window.location.hash = ""; }} />;
+    }
+    // Not authorised — quietly drop the hash and fall through to the app.
+    if (typeof window !== "undefined" && window.location.hash) {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  }
 
   const go = (v) => { setView(v); setSidebar(false); };
 

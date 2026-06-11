@@ -19,6 +19,12 @@ export default function Users({ profiles, loading, onRefresh, toast }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  // Super-admin (corporate) accounts are never shown in the outlet staff
+  // list. The database RLS already hides them from non-super-admins; this
+  // is a frontend backstop so they don't appear even if an admin's own
+  // session somehow returns one.
+  const visibleProfiles = profiles.filter((p) => p.role !== "super_admin");
+
   const save = async () => {
     setErr("");
     if (!form.email.trim() || form.password.length < 6) { setErr("Email and a 6+ char password are required."); return; }
@@ -56,7 +62,7 @@ export default function Users({ profiles, loading, onRefresh, toast }) {
       <DataTable
         loading={loading}
         columns={["Name", "Email", "Role", "Outlet"]}
-        data={profiles}
+        data={visibleProfiles}
         searchKeys={["name", "email"]}
         placeholder="Search staff…"
         renderRow={(u) => (

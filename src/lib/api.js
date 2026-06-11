@@ -192,6 +192,16 @@ export async function fetchOrderItems() {
   return data;
 }
 
+// HQ: every line item with its parent order_id, so we can attribute
+// services to outlets (via orders.outlet_id). Super_admin gets all rows.
+export async function fetchAllOrderItems() {
+  const { data, error } = await supabase
+    .from("order_items")
+    .select("order_id, product_name, service_type, qty, weight_kg, unit, line_total");
+  if (error) throw error;
+  return data;
+}
+
 export async function fetchOrderItemsForOrder(orderId) {
   const { data, error } = await supabase
     .from("order_items")
@@ -229,3 +239,34 @@ export async function deleteOrderPhotos(urls) {
   const { error } = await supabase.storage.from("order-photos").remove(paths);
   if (error) throw error;
 }
+
+/* ------------------------------------------------------------------ */
+/*  HQ / multi-outlet (super_admin only — RLS enforces this)           */
+/* ------------------------------------------------------------------ */
+export async function fetchOutlets() {
+  const { data, error } = await supabase
+    .from("outlets")
+    .select("*")
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
+export async function createOutlet({ code, name, address, phone }) {
+  const { data, error } = await supabase
+    .from("outlets")
+    .insert({ code, name, address, phone })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateOutlet(id, fields) {
+  const { error } = await supabase.from("outlets").update(fields).eq("id", id);
+  if (error) throw error;
+}
+
+// A super_admin's normal fetchOrders/fetchCustomers/fetchExpenses/
+// fetchProfiles already return EVERY outlet's rows (RLS grants the
+// bypass), so HQ reuses those — no separate "all outlets" query needed.
