@@ -61,26 +61,24 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
   const paidNow = collected(order);
   const balance = Number(order.total) - paidNow;
 
-  // Tag rules:
-  //   • kg-priced item → ONE tag for the whole bag, with weight on it.
-  //   • piece-priced item → ONE tag PER garment (qty copies).
+  // One physical tag PER garment, for every item type — so a 10-piece
+  // order prints 10 stickers, one to stick on each cloth.
+  //   • piece-priced item → `qty` tags.
+  //   • kg-priced item    → `qty` tags too (qty = no. of clothes in the
+  //     bag), each carrying the bag's total weight so the set is
+  //     self-describing.
   const tagUnits = items.flatMap((it) => {
-    if (it.unit === "kg") {
-      return [{
-        key: `${it.id}-kg`,
-        product_name: it.product_name,
-        service_type: it.service_type,
-        sublabel: `${Number(it.weight_kg).toFixed(2)} kg · ${it.qty} pc`,
-        kg: true,
-      }];
-    }
     const count = Math.max(1, Math.floor(Number(it.qty) || 1));
+    const isKg = it.unit === "kg";
+    const weightLabel = isKg && it.weight_kg != null
+      ? `${Number(it.weight_kg).toFixed(2)} kg total`
+      : null;
     return Array.from({ length: count }, (_, k) => ({
       key: `${it.id}-${k}`,
       product_name: it.product_name,
       service_type: it.service_type,
-      sublabel: null,
-      kg: false,
+      sublabel: weightLabel,
+      kg: isKg,
     }));
   });
   const totalTags = tagUnits.length;
