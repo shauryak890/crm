@@ -249,7 +249,10 @@ export default function App() {
   const todaySales = orders.filter((o) => isToday(o.created_at)).reduce((a, o) => a + collected(o), 0);
   const todayCount = orders.filter((o) => isToday(o.created_at)).length;
   const displayName = profile?.name || session.user.email;
-  const isAdmin = profile?.role === "admin";
+  const isSuperAdmin = profile?.role === "super_admin";
+  // A super_admin gets full admin access inside the store panel too.
+  const isAdmin = profile?.role === "admin" || isSuperAdmin;
+  const roleLabel = isSuperAdmin ? "Super Admin" : profile?.role === "admin" ? "Admin" : "Staff";
 
   const visibleNav = NAV
     .map((grp) => ({ ...grp, items: grp.items.filter((it) => !it.adminOnly || isAdmin) }))
@@ -321,7 +324,7 @@ export default function App() {
             <div className="flex items-center justify-center rounded-full" style={{ width: 28, height: 28, background: C.navy, color: "#fff", fontWeight: 600, fontSize: 12 }}>{(displayName || "W")[0].toUpperCase()}</div>
             <div className="wb-hide-sm" style={{ lineHeight: 1.1 }}>
               <p style={{ fontSize: 12.5, fontWeight: 600, color: C.navy, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayName}</p>
-              <p style={{ fontSize: 10, color: C.textFaint, marginTop: 2, fontWeight: 500 }}>{profile?.role === "admin" ? "Admin" : "Staff"}</p>
+              <p style={{ fontSize: 10, color: C.textFaint, marginTop: 2, fontWeight: 500 }}>{roleLabel}</p>
             </div>
           </div>
         </header>}

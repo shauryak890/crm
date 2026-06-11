@@ -33,6 +33,10 @@ coverage/
 supabase/.branches/
 supabase/.temp/
 
+# Supabase SQL migrations — kept locally for reference / recovery, but
+# never committed (they describe DB structure we don't want public).
+supabase/*.sql
+
 # Editor & IDE
 .vscode/*
 !.vscode/extensions.json
