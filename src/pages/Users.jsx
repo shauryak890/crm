@@ -19,11 +19,12 @@ export default function Users({ profiles, loading, onRefresh, toast }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  // Super-admin (corporate) accounts are never shown in the outlet staff
-  // list. The database RLS already hides them from non-super-admins; this
-  // is a frontend backstop so they don't appear even if an admin's own
-  // session somehow returns one.
-  const visibleProfiles = profiles.filter((p) => p.role !== "super_admin");
+  // System Users lists outlet STAFF only. Super-admins (corporate) are
+  // hidden by RLS + this backstop; app customers also live in `profiles`
+  // (role='customer', no outlet) and must never appear in the staff list.
+  const visibleProfiles = profiles.filter(
+    (p) => p.role !== "super_admin" && p.role !== "customer"
+  );
 
   const save = async () => {
     setErr("");

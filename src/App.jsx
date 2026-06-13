@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   LayoutDashboard, ShoppingCart, ReceiptText, Truck, Users as UsersIcon, Wallet, UserCog,
   BarChart3, ClipboardList, Settings as SettingsIcon, Smartphone, MapPin, Search, Bell,
-  Menu, Bike, Check, LogOut, Tag, Lock, Minimize2,
+  Menu, Check, LogOut, Tag, Lock, Minimize2,
 } from "lucide-react";
 
 import { C, DISPLAY, inr, collected } from "./theme";
@@ -23,7 +23,8 @@ import Reports from "./pages/Reports";
 import Users from "./pages/Users";
 import Settings from "./pages/Settings";
 import Catalogue from "./pages/Catalogue";
-import Construction from "./pages/Construction";
+import AppOrders from "./pages/AppOrders";
+import LiveTracking from "./pages/LiveTracking";
 import Invoice from "./components/Invoice";
 import DeliveryAlert from "./components/DeliveryAlert";
 import HQPanel from "./pages/hq/HQPanel";
@@ -44,8 +45,8 @@ const NAV = [
     { id: "reports", label: "Reports", icon: BarChart3 },
   ]},
   { section: "App Channel", items: [
-    { id: "apporders", label: "App Orders", icon: Smartphone, soon: true },
-    { id: "tracking", label: "Live Tracking", icon: MapPin, soon: true },
+    { id: "apporders", label: "App Orders", icon: Smartphone },
+    { id: "tracking", label: "Live Tracking", icon: MapPin },
   ]},
   { section: "System", items: [
     { id: "catalogue", label: "Catalogue", icon: Tag, adminOnly: true },
@@ -344,12 +345,8 @@ export default function App() {
           {view === "catalogue" && <Catalogue onRefresh={refresh} toast={toast} />}
           {view === "users" && <Users profiles={profiles} loading={loading} onRefresh={refresh} toast={toast} />}
           {view === "settings" && <Settings profile={profile} session={session} toast={toast} onRefresh={refresh} />}
-          {view === "apporders" && <Construction icon={Smartphone} eta="V1 Launch" title="App Orders"
-            sub="Customer-app orders will land here automatically"
-            features={["Live feed of orders placed from the customer app", "Auto-routed to this outlet by service-area pincode", "Accept / reject incoming orders with one tap", "Itemized estimate locked at pickup, synced to POS", "Push & WhatsApp confirmations to the customer", "Unified with walk-in sales in one queue"]} />}
-          {view === "tracking" && <Construction icon={Bike} eta="Phase 4" title="Live Tracking & Drivers"
-            sub="Pickup & delivery rider operations"
-            features={["Assign nearest free driver to each pickup", "Live driver location on map for pickup & delivery", "QR scan at pickup, plant-in, and doorstep delivery", "Photo proof + OTP on delivery", "Driver daily run history & performance", "Manual reassignment override from this panel"]} />}
+          {view === "apporders" && <AppOrders toast={toast} />}
+          {view === "tracking" && <LiveTracking toast={toast} />}
             </>
           )}
           </div>
