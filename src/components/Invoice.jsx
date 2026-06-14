@@ -39,6 +39,7 @@ const fmtDateTime = (s) => s ? new Date(s).toLocaleString("en-GB", { day: "2-dig
 
 export default function Invoice({ order, customers = [], orders = [], onClose, initialMode = "invoice" }) {
   const [mode, setMode] = useState(initialMode); // 'invoice' | 'tags'
+  const [tagSize, setTagSize] = useState("thermal"); // 'thermal' | 'sheet'
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -83,18 +84,60 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
   });
   const totalTags = tagUnits.length;
 
-  const onPrint = () => window.print();
+  const onPrint = () => {
+    // Tell the print CSS which paper to assume: a narrow thermal label
+    // roll, or a normal A4 sheet. Set on <html> so @page can react.
+    const cls = mode === "tags" && tagSize === "thermal" ? "wb-print-thermal" : "wb-print-sheet";
+    document.documentElement.classList.add(cls);
+    const cleanup = () => {
+      document.documentElement.classList.remove("wb-print-thermal", "wb-print-sheet");
+      window.removeEventListener("afterprint", cleanup);
+    };
+    window.addEventListener("afterprint", cleanup);
+    window.print();
+    // Fallback cleanup in case afterprint doesn't fire.
+    setTimeout(cleanup, 1500);
+  };
   const onWhatsApp = () => {
     if (!order.phone) { alert("No phone number on this order."); return; }
+
+    // Itemised breakdown — one line per garment with qty/weight & amount.
+    const itemLines = items.map((it, i) => {
+      const qtyLabel = it.unit === "kg"
+        ? `${Number(it.weight_kg).toFixed(2)}kg`
+        : `x${it.qty}`;
+      const svc = it.service_type ? ` (${it.service_type}${it.express ? " · Express" : ""})` : "";
+      return `${i + 1}. ${it.product_name}${svc} — ${qtyLabel} = ${inr(it.line_total)}`;
+    });
+
+    const disc = Number(order.discount_pct) || 0;
+    const tax = Number(order.tax_pct) || 0;
+    const sub = Number(order.subtotal) || items.reduce((a, it) => a + Number(it.line_total || 0), 0);
+    const bal = Math.max(0, Number(order.total || 0) - collected(order));
+
     const lines = [
-      `*${STORE.name}* — Invoice #${order.order_no}`,
+      `*${STORE.name}*`,
+      `🧾 Invoice *#${order.order_no}*`,
       `Dear ${order.customer_name},`,
-      `Your order of ${items.length} item(s) totalling ${inr(order.total)} is recorded.`,
-      `Ready by: ${fmtDate(order.due_date)}`,
-      `${order.fulfilment === "delivery" ? "We will deliver to: " + (order.address || "") : "Please collect from the store."}`,
+      ``,
+      `*Your order:*`,
+      ...itemLines,
+      `--------------------`,
+      `Subtotal: ${inr(sub)}`,
+      disc > 0 ? `Discount (${disc}%): -${inr(Math.round(sub * disc / 100))}` : null,
+      tax > 0 ? `Tax (${tax}%): +${inr(Math.round(sub * tax / 100))}` : null,
+      `*Total: ${inr(order.total)}*`,
+      order.payment_status !== "Paid" && bal > 0 ? `Balance due: ${inr(bal)}` : null,
       `Payment: ${order.payment_status} · ${order.payment_method}`,
-      `Thank you!`,
-    ].filter(Boolean).join("\n");
+      ``,
+      `📅 Ready by: ${fmtDate(order.due_date)}`,
+      order.fulfilment === "delivery"
+        ? `🚚 We'll deliver to: ${order.address || "your address"}`
+        : `🏪 Please collect from the store.`,
+      ``,
+      `Thank you for choosing ${STORE.name}! 🙏`,
+    ].filter((l) => l !== null && l !== undefined).join("\n");
+
     const num = String(order.phone).replace(/\D/g, "");
     const url = `https://wa.me/${num.length === 10 ? "91" + num : num}?text=${encodeURIComponent(lines)}`;
     window.open(url, "_blank");
@@ -108,7 +151,7 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
         style={{ background: "#fff", borderRadius: 18, width: 640, maxWidth: "100%", boxShadow: "0 30px 80px -20px rgba(10,34,49,.5)", display: "flex", flexDirection: "column", maxHeight: "92vh" }}>
 
         {/* header (hidden when printing) */}
-        <div className="wb-no-print flex items-center justify-between" style={{ padding: "14px 18px", borderBottom: `1px solid ${C.borderSoft}` }}>
+        <div className="wb-no-print flex items-center justify-between flex-wrap gap-2" style={{ padding: "14px 18px", borderBottom: `1px solid ${C.borderSoft}` }}>
           <div className="flex items-center gap-2">
             <button onClick={() => setMode("invoice")} style={tabStyle(mode === "invoice")}>
               <FileText size={14} /> Invoice
@@ -117,7 +160,15 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
               <TagIcon size={14} /> Tags ({totalTags || "…"})
             </button>
           </div>
-          <button onClick={onClose} style={iconBtn("#EEF2F5", C.textMute)}><X size={16} /></button>
+          <div className="flex items-center gap-2">
+            {mode === "tags" && (
+              <div className="flex items-center" style={{ background: "#EEF2F5", borderRadius: 9, padding: 3 }}>
+                <button onClick={() => setTagSize("thermal")} style={segStyle(tagSize === "thermal")}>Sticker roll</button>
+                <button onClick={() => setTagSize("sheet")} style={segStyle(tagSize === "sheet")}>A4 sheet</button>
+              </div>
+            )}
+            <button onClick={onClose} style={iconBtn("#EEF2F5", C.textMute)}><X size={16} /></button>
+          </div>
         </div>
 
         {/* printable area */}
@@ -126,7 +177,7 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
             <InvoiceBody order={order} items={items} loading={loading}
               prevAmount={prevAmount} paidNow={paidNow} balance={balance} />
           ) : (
-            <TagsBody order={order} units={tagUnits} customer={customer} loading={loading} />
+            <TagsBody order={order} units={tagUnits} customer={customer} loading={loading} size={tagSize} />
           )}
         </div>
 
@@ -149,6 +200,14 @@ const tabStyle = (active) => ({
   padding: "8px 12px", borderRadius: 10, border: "none", cursor: "pointer",
   background: active ? C.navy : "#EEF2F5", color: active ? "#fff" : C.textMute,
   fontSize: 12.5, fontWeight: 700,
+});
+
+const segStyle = (active) => ({
+  border: "none", cursor: "pointer", padding: "6px 12px", borderRadius: 7,
+  fontSize: 12, fontWeight: 700,
+  background: active ? "#fff" : "transparent",
+  color: active ? C.navy : C.textMute,
+  boxShadow: active ? "0 1px 2px rgba(15,42,59,.12)" : "none",
 });
 
 /* ---------------- Invoice body ---------------- */
@@ -276,33 +335,59 @@ function Row({ label, value }) {
 }
 
 /* ---------------- Tag body ---------------- */
-function TagsBody({ order, units, customer, loading }) {
+function TagsBody({ order, units, customer, loading, size = "thermal" }) {
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: C.textFaint }}>Loading tags…</div>;
   if (!units.length) return <div style={{ padding: 40, textAlign: "center", color: C.textFaint }}>No items to tag.</div>;
   const total = units.length;
+  const thermal = size === "thermal";
+
+  // Thermal = one big tag per sticker, stacked. Sheet = 2-up A4 grid.
+  const wrapStyle = thermal
+    ? { display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }
+    : { display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 12 };
+
   return (
-    <div className="wb-tag-sheet" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 12 }}>
+    <div className={`wb-tag-sheet ${thermal ? "wb-tag-thermal" : "wb-tag-grid"}`} style={wrapStyle}>
       {units.map((u, i) => (
         <div key={u.key} className="wb-tag"
-          style={{ border: "1px solid #000", borderRadius: 6, padding: "10px 12px", textAlign: "center", color: "#000",
-            breakInside: "avoid", pageBreakInside: "avoid", display: "flex", flexDirection: "column", gap: 4, background: "#fff" }}>
-          <div style={{ fontWeight: 800, fontSize: 14 }}>Order ID · {order.order_no}</div>
-          <div style={{ fontWeight: 700, fontSize: 11.5 }}>
-            Customer · ({customer?.code || "CL—"})
+          style={{
+            border: "2px solid #000", borderRadius: 8, color: "#000", background: "#fff",
+            breakInside: "avoid", pageBreakInside: "avoid",
+            display: "flex", flexDirection: "column", textAlign: "center",
+            padding: thermal ? "14px 12px" : "10px 12px",
+            gap: thermal ? 6 : 4,
+            width: thermal ? "min(100%, 320px)" : "auto",
+          }}>
+          <div style={{ fontWeight: 800, fontSize: thermal ? 22 : 14, lineHeight: 1.1 }}>
+            Order #{order.order_no}
           </div>
-          <div style={{ fontSize: 10.5 }}>{fmtDate(order.created_at)}</div>
-          <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2 }}>Delivery · {fmtDate(order.due_date)}</div>
-          <div style={{ borderTop: "1px solid #000", borderBottom: "1px solid #000", padding: "5px 0", margin: "6px 0", fontWeight: 800, fontSize: 13, textTransform: "uppercase" }}>
+          <div style={{ fontWeight: 700, fontSize: thermal ? 15 : 11.5 }}>
+            Customer · {customer?.code || "CL—"}
+          </div>
+          <div className="flex items-center justify-center" style={{ gap: thermal ? 14 : 6, fontSize: thermal ? 13 : 10.5, fontWeight: 600 }}>
+            <span>In: {fmtDate(order.created_at)}</span>
+            <span>Due: {fmtDate(order.due_date)}</span>
+          </div>
+          <div style={{
+            borderTop: "2px solid #000", borderBottom: "2px solid #000",
+            padding: thermal ? "8px 0" : "5px 0", margin: thermal ? "8px 0" : "6px 0",
+            fontWeight: 800, fontSize: thermal ? 24 : 13, textTransform: "uppercase", lineHeight: 1.15,
+          }}>
             {u.product_name}
           </div>
           {u.sublabel && (
-            <div style={{ fontSize: 11.5, fontWeight: 700, marginTop: -2 }}>{u.sublabel}</div>
+            <div style={{ fontSize: thermal ? 16 : 11.5, fontWeight: 700, marginTop: -2 }}>{u.sublabel}</div>
           )}
-          <div style={{ display: "flex", justifyContent: "center", margin: "2px 0" }}>
-            <Barcode value={`${order.order_no}-${i + 1}`} height={36} width={1.4} displayValue />
+          <div style={{ display: "flex", justifyContent: "center", margin: thermal ? "6px 0 2px" : "2px 0" }}>
+            <Barcode
+              value={`${order.order_no}-${i + 1}`}
+              height={thermal ? 70 : 36}
+              width={thermal ? 2.6 : 1.4}
+              displayValue
+            />
           </div>
-          <div style={{ fontWeight: 800, fontSize: 14 }}>{i + 1}/{total}</div>
-          <div style={{ fontSize: 9.5, color: "#444", letterSpacing: ".06em" }}>{STORE.name.toUpperCase()}</div>
+          <div style={{ fontWeight: 800, fontSize: thermal ? 26 : 14 }}>{i + 1} / {total}</div>
+          <div style={{ fontSize: thermal ? 12 : 9.5, color: "#000", letterSpacing: ".08em", fontWeight: 700 }}>{STORE.name.toUpperCase()}</div>
         </div>
       ))}
     </div>

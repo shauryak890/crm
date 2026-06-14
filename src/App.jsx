@@ -227,6 +227,36 @@ export default function App() {
     setOrders((p) => p.map((x) => (x.id === o.id ? { ...x, payment_status: next, amount_paid } : x)));
     try { await api.updateOrderFields(o.id, { payment_status: next, amount_paid }); } catch (e) { toast("Update failed: " + e.message); refresh(); }
   };
+  // who is making the edit — stamped into the audit trail
+  const editor = { id: profile?.id || session.user.id, name: profile?.name || session.user.email };
+  const onEditOrder = async ({ id, before, fields, items }) => {
+    try {
+      await api.updateOrderFull({ id, before, fields, items, editor });
+      toast(`Order #${before.order_no} updated`);
+      await refresh();
+      return true;
+    } catch (e) { toast("Edit failed: " + e.message); return false; }
+  };
+  const onDeleteOrder = async (o) => {
+    if (!confirm(`Delete order #${o.order_no} permanently? This cannot be undone.`)) return;
+    try {
+      if (o.image_urls?.length) { try { await api.deleteOrderPhotos(o.image_urls); } catch {/* best effort */} }
+      await api.deleteOrder({ id: o.id, editor });
+      toast(`Order #${o.order_no} deleted`);
+      await refresh();
+    } catch (e) { toast("Delete failed: " + e.message); }
+  };
+  const onChangeDeliveryDate = async ({ id, before, due_date, reason }) => {
+    try {
+      await api.changeDeliveryDate({ id, before, due_date, reason, editor });
+      toast(`Delivery date updated for #${before.order_no}`);
+      await refresh();
+      return true;
+    } catch (e) { toast("Could not update date: " + e.message); return false; }
+  };
+  const onMarkDelayNotified = async (id) => {
+    try { await api.markDelayNotified(id); await refresh(); } catch {/* best-effort */}
+  };
   const onAddCustomer = async (c) => {
     try { await api.createCustomer(c); toast("Customer added"); await refresh(); return true; }
     catch (e) { toast("Could not add: " + e.message); return false; }
@@ -336,7 +366,10 @@ export default function App() {
             <>
           {view === "dashboard" && <Dashboard orders={orders} go={go} displayName={displayName} customers={customers} />}
           {view === "pos" && <POS products={products} customers={customers} orders={orders} onPay={onPay} focusMode={focusMode} setFocusMode={setFocusMode} />}
-          {view === "sales" && <Sales orders={orders} loading={loading} onStatus={onStatus} onTogglePaid={onTogglePaid} onOpenInvoice={setInvoiceOrder} />}
+          {view === "sales" && <Sales orders={orders} loading={loading} products={products} isAdmin={isAdmin}
+            onStatus={onStatus} onTogglePaid={onTogglePaid} onOpenInvoice={setInvoiceOrder}
+            onEditOrder={onEditOrder} onDeleteOrder={onDeleteOrder}
+            onChangeDeliveryDate={onChangeDeliveryDate} onMarkDelayNotified={onMarkDelayNotified} />}
           {view === "orderstatus" && <OrderStatus orders={orders} onStatus={onStatus} />}
           {view === "delivery" && <Delivery orders={orders} />}
           {view === "customers" && <Customers customers={customers} orders={orders} loading={loading} onAdd={onAddCustomer} onDelete={onDeleteCustomer} />}

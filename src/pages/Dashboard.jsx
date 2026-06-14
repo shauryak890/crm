@@ -1,6 +1,6 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import {
-  Wallet, TrendingUp, ShoppingBag, Users as UsersIcon, Plus, ArrowUpRight, Download, Calendar,
+  Wallet, TrendingUp, ShoppingBag, Users as UsersIcon, Plus, ArrowUpRight, Download, Calendar, ArrowUp, ArrowDown,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, AreaChart, Area,
@@ -10,6 +10,50 @@ import { Card, Btn, Badge, IconCircle, Trend } from "../components/ui";
 import { paymentTotals, buildYearData, isToday } from "../lib/aggregate";
 
 const todayLabel = new Date().toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "long", year: "numeric" });
+
+/* ── Period helpers ─────────────────────────────────────────────────
+   For a chosen period (day / month / year) return:
+     • the current window's collected revenue + order count
+     • the SAME window one year earlier (e.g. this June vs last June)
+     • the % change between them
+   So the owner can see "this month vs the same month last year". */
+function inSameDay(d, ref)   { return d.getDate() === ref.getDate() && d.getMonth() === ref.getMonth() && d.getFullYear() === ref.getFullYear(); }
+function inSameMonth(d, ref) { return d.getMonth() === ref.getMonth() && d.getFullYear() === ref.getFullYear(); }
+function inSameYear(d, ref)  { return d.getFullYear() === ref.getFullYear(); }
+
+function periodStats(orders, period) {
+  const now = new Date();
+  const lastYear = new Date(now);
+  lastYear.setFullYear(now.getFullYear() - 1);
+
+  const match = { day: inSameDay, month: inSameMonth, year: inSameYear }[period];
+
+  let cur = 0, prev = 0, curCount = 0, prevCount = 0;
+  orders.forEach((o) => {
+    const d = new Date(o.created_at);
+    if (match(d, now))      { cur += collected(o);  curCount++; }
+    if (match(d, lastYear)) { prev += collected(o); prevCount++; }
+  });
+  const delta = prev === 0 ? (cur > 0 ? 100 : 0) : ((cur - prev) / prev) * 100;
+  return { cur, prev, curCount, prevCount, delta };
+}
+
+const PERIOD_LABEL = {
+  day:   { now: "Today",        ago: "Same day last year" },
+  month: { now: "This month",   ago: "Same month last year" },
+  year:  { now: "This year",    ago: "Last year" },
+};
+
+// A small day-bars series for the daily view (last 14 days).
+function dailySeries(orders, days = 14) {
+  const out = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const v = orders.filter((o) => inSameDay(new Date(o.created_at), d)).reduce((a, o) => a + collected(o), 0);
+    out.push({ m: d.getDate() + "/" + (d.getMonth() + 1), sales: Math.round(v) });
+  }
+  return out;
+}
 
 // Compare current-month value to last-month, return % delta.
 function deltaForMonth(orders, monthOffset = 0) {
@@ -46,6 +90,7 @@ function sparkData(orders, days = 8) {
 }
 
 export default function Dashboard({ orders, go, displayName, customers = [] }) {
+  const [period, setPeriod] = useState("month"); // 'day' | 'month' | 'year'
   const pt = paymentTotals(orders);
   const year = buildYearData(orders, []);
   const delta = useMemo(() => deltaForMonth(orders), [orders]);
@@ -53,6 +98,10 @@ export default function Dashboard({ orders, go, displayName, customers = [] }) {
   const todayOrders = orders.filter((o) => isToday(o.created_at));
   const todayPaidTotal = todayOrders.reduce((a, o) => a + collected(o), 0);
   const unpaidTotal = orders.reduce((a, o) => a + balanceDue(o), 0);
+
+  const stats = useMemo(() => periodStats(orders, period), [orders, period]);
+  const chartData = useMemo(() => (period === "day" ? dailySeries(orders) : year), [orders, period, year]);
+  const lbl = PERIOD_LABEL[period];
 
   const firstName = (displayName || "there").split(/[ @]/)[0];
   const first = firstName ? firstName.charAt(0).toUpperCase() + firstName.slice(1) : "there";
@@ -69,14 +118,51 @@ export default function Dashboard({ orders, go, displayName, customers = [] }) {
             Monitor your counter, your customers and today's takings — all in one place.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2" style={{ background: "#fff", border: `1px solid ${C.border}`, padding: "8px 14px", borderRadius: 11, fontSize: 12.5, color: C.text, fontWeight: 500 }}>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Period toggle — drives the comparison card + chart */}
+          <div className="flex items-center" style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 11, padding: 3 }}>
+            {[["day", "Daily"], ["month", "Monthly"], ["year", "Yearly"]].map(([k, label]) => (
+              <button key={k} onClick={() => setPeriod(k)}
+                style={{
+                  border: "none", cursor: "pointer", padding: "6px 13px", borderRadius: 8,
+                  fontSize: 12.5, fontWeight: 600,
+                  background: period === k ? C.navy : "transparent",
+                  color: period === k ? "#fff" : C.textMute,
+                }}>{label}</button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 wb-hide-sm" style={{ background: "#fff", border: `1px solid ${C.border}`, padding: "8px 14px", borderRadius: 11, fontSize: 12.5, color: C.text, fontWeight: 500 }}>
             <Calendar size={14} color={C.textMute} /> {todayLabel}
           </div>
           <Btn variant="navy" icon={Download} small onClick={() => window.print()}>Export</Btn>
           <Btn variant="primary" icon={Plus} small onClick={() => go("pos")}>New Sale</Btn>
         </div>
       </div>
+
+      {/* ───── Year-on-year comparison for the chosen period ───── */}
+      <Card pad={false} hover style={{ marginBottom: 18, overflow: "hidden" }}>
+        <div className="flex items-stretch flex-wrap">
+          <div style={{ flex: "1 1 300px", padding: 24, minWidth: 260, background: `linear-gradient(135deg, ${C.navy} 0%, ${C.navyDeep} 100%)`, color: "#fff" }}>
+            <p className="wb-eyebrow" style={{ color: "#9FB5C5" }}>{lbl.now} · collected</p>
+            <p style={{ fontSize: 38, fontWeight: 700, letterSpacing: "-.02em", marginTop: 8, lineHeight: 1 }}>{inr(stats.cur)}</p>
+            <p style={{ color: "#9FB5C5", fontSize: 13, marginTop: 8 }}>{stats.curCount} order{stats.curCount === 1 ? "" : "s"}</p>
+            <div className="inline-flex items-center gap-2" style={{ marginTop: 16, background: stats.delta >= 0 ? "rgba(31,169,113,.2)" : "rgba(224,72,77,.22)", color: stats.delta >= 0 ? "#7CE0B4" : "#FCA5A8", padding: "6px 12px", borderRadius: 99, fontSize: 13, fontWeight: 700 }}>
+              {stats.delta >= 0 ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
+              {Math.abs(stats.delta).toFixed(1)}% vs last year
+            </div>
+          </div>
+          <div style={{ flex: "1 1 300px", padding: 24, minWidth: 260, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+            <p className="wb-eyebrow">{lbl.ago}</p>
+            <p style={{ fontSize: 26, fontWeight: 700, color: C.navy, letterSpacing: "-.02em", marginTop: 8 }}>{inr(stats.prev)}</p>
+            <p style={{ color: C.textMute, fontSize: 13, marginTop: 6 }}>{stats.prevCount} order{stats.prevCount === 1 ? "" : "s"} in the same period last year</p>
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.borderSoft}`, fontSize: 13, color: C.textMute }}>
+              {stats.delta >= 0
+                ? <span>You're <b style={{ color: C.green }}>{inr(stats.cur - stats.prev)}</b> ahead of last year.</span>
+                : <span>You're <b style={{ color: C.red }}>{inr(stats.prev - stats.cur)}</b> behind last year.</span>}
+            </div>
+          </div>
+        </div>
+      </Card>
 
       {/* ───── Stat tiles ───── */}
       <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginBottom: 18 }}>
@@ -133,22 +219,25 @@ export default function Dashboard({ orders, go, displayName, customers = [] }) {
           <div style={{ flex: "2 1 480px", padding: 24, minWidth: 360 }}>
             <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
               <div>
-                <p className="wb-eyebrow">Monthly</p>
+                <p className="wb-eyebrow">{period === "day" ? "Last 14 days" : "Monthly"}</p>
                 <h3 style={{ fontSize: 17, fontWeight: 700, color: C.navy, marginTop: 4, letterSpacing: "-.01em" }}>Sales overview</h3>
               </div>
-              <Badge tone="info">Year {new Date().getFullYear()}</Badge>
+              <Badge tone="info">{period === "day" ? "Daily" : `Year ${new Date().getFullYear()}`}</Badge>
             </div>
             <div style={{ height: 200 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={year} margin={{ left: -12, right: 8, top: 6 }}>
+                <BarChart data={chartData} margin={{ left: -12, right: 8, top: 6 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} vertical={false} />
                   <XAxis dataKey="m" tick={{ fontSize: 11, fill: C.textFaint }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 11, fill: C.textFaint }} axisLine={false} tickLine={false} />
                   <Tooltip contentStyle={{ borderRadius: 10, border: `1px solid ${C.border}`, fontSize: 12.5 }} formatter={(v) => inr(v)} cursor={{ fill: C.tealSoft }} />
                   <Bar dataKey="sales" radius={[8, 8, 0, 0]}>
-                    {year.map((_, i) => (
-                      <Cell key={i} fill={i === new Date().getMonth() ? C.teal : "#D6E7EE"} />
-                    ))}
+                    {chartData.map((row, i) => {
+                      const isCurrent = period === "day"
+                        ? i === chartData.length - 1
+                        : i === new Date().getMonth();
+                      return <Cell key={i} fill={isCurrent ? C.teal : "#D6E7EE"} />;
+                    })}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>

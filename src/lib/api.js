@@ -113,6 +113,137 @@ export async function updateOrderFields(id, fields) {
   if (error) throw error;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Order editing + audit                                              */
+/* ------------------------------------------------------------------ */
+
+// Build a [{field, from, to}] diff of two flat objects, for the audit log.
+export function diffFields(before, after, labels = {}) {
+  const out = [];
+  Object.keys(after).forEach((k) => {
+    const a = before?.[k];
+    const b = after[k];
+    if (String(a ?? "") !== String(b ?? "")) {
+      out.push({ field: labels[k] || k, from: a ?? null, to: b ?? null });
+    }
+  });
+  return out;
+}
+
+// Write one audit row. `editor` = { id, name }.
+// Best-effort: if the audit insert fails (e.g. RLS, or the order_edits
+// table/migration isn't present), we DON'T blow up the core action that
+// already succeeded. We log a console warning instead.
+export async function logOrderEdit({ order_id, editor, kind = "edit", changes = [], note = null }) {
+  try {
+    const { error } = await supabase.from("order_edits").insert({
+      order_id,
+      edited_by: editor?.id || null,
+      editor_name: editor?.name || null,
+      kind,
+      changes,
+      note,
+    });
+    if (error) console.warn("order_edits log skipped:", error.message);
+  } catch (e) {
+    console.warn("order_edits log skipped:", e?.message || e);
+  }
+}
+
+// Fetch the edit history for one order (newest first).
+export async function fetchOrderEdits(orderId) {
+  const { data, error } = await supabase
+    .from("order_edits")
+    .select("*")
+    .eq("order_id", orderId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+// Full edit of an existing sale: replace fields + (optionally) line items,
+// stamp the audit columns, and write an order_edits row. `editor`={id,name}.
+export async function updateOrderFull({ id, before, fields, items, editor }) {
+  const changes = diffFields(before, fields, ORDER_FIELD_LABELS);
+
+  const stamped = {
+    ...fields,
+    edited_at: new Date().toISOString(),
+    edited_by: editor?.id || null,
+    edited_by_name: editor?.name || null,
+    edit_count: (Number(before?.edit_count) || 0) + 1,
+  };
+  const { error } = await supabase.from("orders").update(stamped).eq("id", id);
+  if (error) throw error;
+
+  // Replace line items if a new set was supplied.
+  if (Array.isArray(items)) {
+    const { error: delErr } = await supabase.from("order_items").delete().eq("order_id", id);
+    if (delErr) throw delErr;
+    if (items.length) {
+      const rows = items.map((i) => {
+        const { key, id: _omit, ...rest } = i;
+        const row = { ...rest, order_id: id };
+        Object.keys(row).forEach((k) => row[k] === undefined && delete row[k]);
+        return row;
+      });
+      const { error: insErr } = await supabase.from("order_items").insert(rows);
+      if (insErr) throw insErr;
+    }
+    changes.push({ field: "items", from: "(previous)", to: `${items.length} item(s)` });
+  }
+
+  await logOrderEdit({ order_id: id, editor, kind: "edit", changes });
+}
+
+// Change just the delivery date, with a reason — logged separately.
+export async function changeDeliveryDate({ id, before, due_date, reason, editor }) {
+  const stamped = {
+    due_date,
+    delivery_changed_at: new Date().toISOString(),
+    delivery_change_reason: reason || null,
+    edited_at: new Date().toISOString(),
+    edited_by: editor?.id || null,
+    edited_by_name: editor?.name || null,
+    edit_count: (Number(before?.edit_count) || 0) + 1,
+  };
+  const { error } = await supabase.from("orders").update(stamped).eq("id", id);
+  if (error) throw error;
+  await logOrderEdit({
+    order_id: id,
+    editor,
+    kind: "delivery_date",
+    changes: [{ field: "Delivery date", from: before?.due_date || null, to: due_date }],
+    note: reason || null,
+  });
+}
+
+// Mark that a delay notice was sent to the customer.
+export async function markDelayNotified(id) {
+  const { error } = await supabase
+    .from("orders")
+    .update({ delay_notified_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteOrder({ id, editor }) {
+  // Log first (the cascade delete would otherwise remove the order_edits
+  // row too), into a non-cascading note is impossible — so we just delete.
+  // order_items cascade-delete via FK.
+  const { error } = await supabase.from("orders").delete().eq("id", id);
+  if (error) throw error;
+}
+
+const ORDER_FIELD_LABELS = {
+  customer_name: "Customer", phone: "Phone", address: "Address",
+  fulfilment: "Fulfilment", due_date: "Delivery date",
+  subtotal: "Subtotal", discount_pct: "Discount %", tax_pct: "Tax %",
+  total: "Total", amount_paid: "Amount paid",
+  payment_method: "Payment method", payment_status: "Payment status",
+  order_status: "Order status", notes: "Notes",
+};
+
 export async function createCustomer(c) {
   const { data, error } = await supabase
     .from("customers")
@@ -221,6 +352,20 @@ export async function uploadOrderPhoto(file) {
     .upload(path, file, { contentType: file.type || "image/jpeg" });
   if (error) throw error;
   const { data } = supabase.storage.from("order-photos").getPublicUrl(path);
+  return data.publicUrl;
+}
+
+// Upload a service/product image to the public service-images bucket and
+// return its public URL (stored on products.image_url). Powers the
+// customer app's service cards / detail page / recommended row.
+export async function uploadServiceImage(file) {
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const { error } = await supabase.storage
+    .from("service-images")
+    .upload(path, file, { contentType: file.type || "image/jpeg" });
+  if (error) throw error;
+  const { data } = supabase.storage.from("service-images").getPublicUrl(path);
   return data.publicUrl;
 }
 

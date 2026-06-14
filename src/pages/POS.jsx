@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Search, Shirt, ShoppingCart, Trash2, Banknote, Printer, X, Plus, UserCheck, Camera, FileText, Pencil,
-  Users as UsersIcon, Maximize2, Minimize2,
+  Users as UsersIcon, Maximize2, Minimize2, Image as ImageIcon,
 } from "lucide-react";
 import { C, DISPLAY, SERVICE_TYPES, PAYMENT_METHODS, DAILY_CAPACITY, inr } from "../theme";
 import * as api from "../lib/api";
 import { Card, PageHead, Btn, iconBtn } from "../components/ui";
+import CameraCapture from "../components/CameraCapture";
 
 const posLbl = { fontSize: 11.5, fontWeight: 700, color: C.textMute, marginBottom: 6, display: "block", textTransform: "uppercase", letterSpacing: ".03em" };
 const posField = { width: "100%", border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 11px", fontSize: 13.5, outline: "none", background: "#fff", color: C.text };
@@ -70,10 +71,14 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
   // Damage / notes — text note + staged image files (uploaded on Pay).
   const [damageNote, setDamageNote] = useState("");
   const [photos, setPhotos] = useState([]); // [{ file, preview }]
+  const [cameraOpen, setCameraOpen] = useState(false);
   const onPickPhotos = (e) => {
     const files = Array.from(e.target.files || []);
     setPhotos((cur) => [...cur, ...files.map((f) => ({ file: f, preview: URL.createObjectURL(f) }))]);
     e.target.value = ""; // allow picking the same file again later
+  };
+  const onCameraShot = (file) => {
+    setPhotos((cur) => [...cur, { file, preview: URL.createObjectURL(file) }]);
   };
   const removePhoto = (idx) => setPhotos((cur) => {
     const next = cur.slice();
@@ -426,8 +431,15 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
                 placeholder="e.g. small tear on left sleeve, faded collar…"
                 style={{ ...posField, resize: "vertical", fontFamily: "inherit", marginBottom: 8 }} />
               <div className="flex items-center gap-2 flex-wrap">
+                {/* Open the live in-app camera (works on desktop webcams too) */}
+                <button type="button" onClick={() => setCameraOpen(true)}
+                  className="wb-press"
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 12px", border: "none", borderRadius: 10, cursor: "pointer", fontSize: 12.5, fontWeight: 700, color: "#fff", background: C.teal }}>
+                  <Camera size={14} /> Take photo
+                </button>
+                {/* Upload — pick existing images from the device */}
                 <label style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 12px", border: `1px dashed ${C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 12.5, fontWeight: 700, color: C.tealDark, background: "#F7FAFB" }}>
-                  <Camera size={14} /> Add photo
+                  <ImageIcon size={14} /> Upload
                   <input type="file" accept="image/*" multiple onChange={onPickPhotos} style={{ display: "none" }} />
                 </label>
                 {photos.map((p, i) => (
@@ -524,6 +536,11 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
           </div>
         </Card>
       </div>
+
+      {/* live camera */}
+      {cameraOpen && (
+        <CameraCapture onCapture={onCameraShot} onClose={() => setCameraOpen(false)} />
+      )}
 
       {/* client picker */}
       {pickerOpen && (() => {

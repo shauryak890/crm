@@ -62,6 +62,21 @@ export const SERVICE_TYPES = [
 
 export const PAYMENT_METHODS = ["UPI", "Cash", "Card", "Cheque"];
 
+// Reasons a delivery date might be pushed back. Picked from a dropdown
+// when an admin changes the delivery date, and used in the apology
+// message sent to the customer.
+export const DELAY_REASONS = [
+  "Higher than usual order volume",
+  "Staff not available",
+  "Electricity / power issue at the outlet",
+  "Machine breakdown / maintenance",
+  "Delicate garment needs extra care time",
+  "Stain removal taking longer than expected",
+  "Delivery partner unavailable",
+  "Outlet closed (holiday / emergency)",
+  "Other",
+];
+
 // How many garments the plant can process in a single day. Used by the
 // POS to stop a delivery date being booked past what we can actually
 // turn around, so we don't over-promise and run late.
