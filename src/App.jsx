@@ -261,6 +261,20 @@ export default function App() {
     try { await api.createCustomer(c); toast("Customer added"); await refresh(); return true; }
     catch (e) { toast("Could not add: " + e.message); return false; }
   };
+  // Quick-add a brand-new product from the POS counter (admin only).
+  // Saves to the catalogue and returns the created product so the POS can
+  // drop it straight into the cart.
+  const onQuickAddProduct = async (p) => {
+    try {
+      const created = await api.createProduct(p);
+      toast(`"${created.name}" added to catalogue`);
+      await refresh();
+      return created;
+    } catch (e) {
+      toast("Could not add product: " + e.message);
+      return null;
+    }
+  };
   const onDeleteCustomer = async (c) => {
     if (!confirm(`Delete ${c.first_name} ${c.last_name}?`)) return;
     try { await api.deleteCustomer(c.id); toast("Customer deleted"); await refresh(); }
@@ -365,10 +379,10 @@ export default function App() {
           {ADMIN_VIEWS.has(view) && !isAdmin ? <AccessDenied /> : (
             <>
           {view === "dashboard" && <Dashboard orders={orders} go={go} displayName={displayName} customers={customers} />}
-          {view === "pos" && <POS products={products} customers={customers} orders={orders} onPay={onPay} focusMode={focusMode} setFocusMode={setFocusMode} />}
+          {view === "pos" && <POS products={products} customers={customers} orders={orders} onPay={onPay} focusMode={focusMode} setFocusMode={setFocusMode} isAdmin={isAdmin} onQuickAddProduct={onQuickAddProduct} />}
           {view === "sales" && <Sales orders={orders} loading={loading} products={products} isAdmin={isAdmin}
             onStatus={onStatus} onTogglePaid={onTogglePaid} onOpenInvoice={setInvoiceOrder}
-            onEditOrder={onEditOrder} onDeleteOrder={onDeleteOrder}
+            onEditOrder={onEditOrder} onDeleteOrder={onDeleteOrder} onQuickAddProduct={onQuickAddProduct}
             onChangeDeliveryDate={onChangeDeliveryDate} onMarkDelayNotified={onMarkDelayNotified} />}
           {view === "orderstatus" && <OrderStatus orders={orders} onStatus={onStatus} />}
           {view === "delivery" && <Delivery orders={orders} />}

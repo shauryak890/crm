@@ -10,7 +10,7 @@ const fmtDateTime = (s) => s ? new Date(s).toLocaleString("en-GB", { day: "2-dig
 export default function Sales({
   orders, loading, products = [], isAdmin,
   onStatus, onTogglePaid, onOpenInvoice,
-  onEditOrder, onDeleteOrder, onChangeDeliveryDate, onMarkDelayNotified,
+  onEditOrder, onDeleteOrder, onChangeDeliveryDate, onMarkDelayNotified, onQuickAddProduct,
 }) {
   const [editOrder, setEditOrder] = useState(null);     // full edit
   const [dateOrder, setDateOrder] = useState(null);     // delivery-date change
@@ -89,7 +89,7 @@ export default function Sales({
       />
 
       {editOrder && (
-        <EditSaleModal order={editOrder} products={products}
+        <EditSaleModal order={editOrder} products={products} onQuickAddProduct={onQuickAddProduct}
           onClose={() => setEditOrder(null)}
           onSave={async (payload) => { const ok = await onEditOrder(payload); if (ok) setEditOrder(null); }} />
       )}
@@ -111,7 +111,8 @@ function editTitle(o) {
 }
 
 /* ─────────────── Edit sale (admin) ─────────────── */
-function EditSaleModal({ order, products, onClose, onSave }) {
+function EditSaleModal({ order, products, onClose, onSave, onQuickAddProduct }) {
+  const [quickAdd, setQuickAdd] = useState(false);
   const [form, setForm] = useState({
     customer_name: order.customer_name || "",
     phone: order.phone || "",
@@ -224,9 +225,14 @@ function EditSaleModal({ order, products, onClose, onSave }) {
           ))}
         </div>
         <div className="flex items-center gap-2" style={{ padding: "10px 14px", borderTop: `1px solid ${C.borderSoft}`, background: C.bg }}>
-          <select defaultValue="" onChange={(e) => { const p = products.find((x) => x.id === e.target.value); addItem(p); e.target.value = ""; }}
+          <select value="" onChange={(e) => {
+              if (e.target.value === "__new") { setQuickAdd(true); }
+              else { const p = products.find((x) => x.id === e.target.value); addItem(p); }
+              e.target.value = "";
+            }}
             style={{ ...field, flex: 1, padding: "8px 10px" }}>
             <option value="">+ Add a product…</option>
+            {onQuickAddProduct && <option value="__new">＋ New item (not in catalogue)…</option>}
             {products.map((p) => <option key={p.id} value={p.id}>{p.name} · {inr(p.price)}{p.unit === "kg" ? "/kg" : ""}</option>)}
           </select>
         </div>
@@ -256,6 +262,53 @@ function EditSaleModal({ order, products, onClose, onSave }) {
       <div className="flex justify-end gap-2" style={{ marginTop: 18 }}>
         <Btn variant="outline" small onClick={onClose}>Cancel</Btn>
         <Btn variant="primary" small icon={Pencil} onClick={save} disabled={busy}>Save changes</Btn>
+      </div>
+
+      {quickAdd && (
+        <QuickItem
+          onClose={() => setQuickAdd(false)}
+          onSave={async (payload) => {
+            const created = await onQuickAddProduct(payload);
+            if (created) { addItem(created); setQuickAdd(false); }
+            return created;
+          }} />
+      )}
+    </Modal>
+  );
+}
+
+/* Minimal new-product form used inside the edit-sale modal. */
+function QuickItem({ onClose, onSave }) {
+  const [name, setName] = useState("");
+  const [price, setPrice] = useState("");
+  const [unit, setUnit] = useState("piece");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const save = async () => {
+    setErr("");
+    const nm = name.trim(); const pr = Number(price);
+    if (!nm) { setErr("Name is required."); return; }
+    if (!Number.isFinite(pr) || pr < 0) { setErr("Enter a valid price."); return; }
+    setBusy(true);
+    const created = await onSave({ name: nm, price: pr, category: "General", unit });
+    setBusy(false);
+    if (!created) setErr("Could not save.");
+  };
+  return (
+    <Modal title="New item" sub="Saved to the catalogue and added to this order" onClose={onClose} width={400}>
+      <div><label style={fieldLabel}>Item name *</label><input style={field} value={name} onChange={(e) => setName(e.target.value)} autoFocus /></div>
+      <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 14 }}>
+        <div><label style={fieldLabel}>Charged by</label>
+          <select style={field} value={unit} onChange={(e) => setUnit(e.target.value)}>
+            <option value="piece">Per piece</option><option value="kg">Per kg</option>
+          </select>
+        </div>
+        <div><label style={fieldLabel}>Price (₹) *</label><input style={field} type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} /></div>
+      </div>
+      {err && <div style={{ background: C.redLt, color: C.red, fontSize: 12.5, fontWeight: 600, padding: "9px 12px", borderRadius: 9, marginTop: 14 }}>{err}</div>}
+      <div className="flex justify-end gap-2" style={{ marginTop: 18 }}>
+        <Btn variant="outline" small onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" small onClick={save} disabled={busy}>Add</Btn>
       </div>
     </Modal>
   );

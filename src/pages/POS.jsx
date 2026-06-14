@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import { C, DISPLAY, SERVICE_TYPES, PAYMENT_METHODS, DAILY_CAPACITY, inr } from "../theme";
 import * as api from "../lib/api";
-import { Card, PageHead, Btn, iconBtn } from "../components/ui";
+import { Card, PageHead, Btn, iconBtn, Modal, field, fieldLabel } from "../components/ui";
 import CameraCapture from "../components/CameraCapture";
 
 const posLbl = { fontSize: 11.5, fontWeight: 700, color: C.textMute, marginBottom: 6, display: "block", textTransform: "uppercase", letterSpacing: ".03em" };
@@ -28,7 +28,7 @@ const splitName = (full) => {
   return { first_name: parts[0] || "", last_name: parts.slice(1).join(" ") };
 };
 
-export default function POS({ products, customers, orders = [], onPay, focusMode, setFocusMode }) {
+export default function POS({ products, customers, orders = [], onPay, focusMode, setFocusMode, isAdmin, onQuickAddProduct }) {
   const [cart, setCart] = useState([]);
   const [modal, setModal] = useState(null);          // product object
   const [editingKey, setEditingKey] = useState(null); // cart key being edited (null = adding new)
@@ -79,6 +79,20 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
   };
   const onCameraShot = (file) => {
     setPhotos((cur) => [...cur, { file, preview: URL.createObjectURL(file) }]);
+  };
+
+  // Quick-add a missing product to the catalogue from the counter.
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const handleQuickAdd = async (payload) => {
+    // payload = { name, price, category, unit } → create + open service modal
+    const created = await onQuickAddProduct(payload);
+    if (created) {
+      setQuickAddOpen(false);
+      setModal(created);      // straight into the "select service" flow
+      setEditingKey(null);
+      setQty(1); setWeight("1"); setExpress(false); setSvc("Laundry");
+    }
+    return created;
   };
   const removePhoto = (idx) => setPhotos((cur) => {
     const next = cur.slice();
@@ -293,9 +307,18 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
         {/* product grid */}
         <Card pad={false} style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
           <div style={{ padding: 16, borderBottom: `1px solid ${C.borderSoft}`, display: "flex", flexDirection: "column", gap: 12 }}>
-            <div className="flex items-center gap-2 rounded-xl" style={{ border: `1px solid ${C.border}`, padding: "9px 12px" }}>
-              <Search size={15} color={C.textFaint} />
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find a product…" style={{ border: "none", outline: "none", fontSize: 13.5, width: "100%", background: "transparent" }} />
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 rounded-xl" style={{ border: `1px solid ${C.border}`, padding: "9px 12px", flex: 1 }}>
+                <Search size={15} color={C.textFaint} />
+                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find a product…" style={{ border: "none", outline: "none", fontSize: 13.5, width: "100%", background: "transparent" }} />
+              </div>
+              {isAdmin && (
+                <button type="button" onClick={() => setQuickAddOpen(true)} title="Add a new item to the catalogue"
+                  className="wb-press inline-flex items-center gap-1"
+                  style={{ background: C.teal, color: "#fff", border: "none", borderRadius: 11, padding: "9px 13px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  <Plus size={15} /> New item
+                </button>
+              )}
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               {categories.map((cat) => {
@@ -542,6 +565,15 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
         <CameraCapture onCapture={onCameraShot} onClose={() => setCameraOpen(false)} />
       )}
 
+      {/* quick-add product */}
+      {quickAddOpen && (
+        <QuickAddProduct
+          categories={categories.filter((c) => c !== "All")}
+          onClose={() => setQuickAddOpen(false)}
+          onSave={handleQuickAdd}
+        />
+      )}
+
       {/* client picker */}
       {pickerOpen && (() => {
         const q = pickerQuery.trim().toLowerCase();
@@ -679,5 +711,75 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
         </div>
       )}
     </div>
+  );
+}
+
+/* ─────────────── Quick-add a missing product (admin) ─────────────── */
+function QuickAddProduct({ categories = [], onClose, onSave }) {
+  const [name, setName] = useState("");
+  const [price, setPrice] = useState("");
+  const [unit, setUnit] = useState("piece");
+  const [category, setCategory] = useState(categories[0] || "General");
+  const [newCat, setNewCat] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const save = async () => {
+    setErr("");
+    const nm = name.trim();
+    const pr = Number(price);
+    if (!nm) { setErr("Item name is required."); return; }
+    if (!Number.isFinite(pr) || pr < 0) { setErr("Enter a valid price."); return; }
+    const cat = (category === "__new" ? newCat.trim() : category) || "General";
+    setBusy(true);
+    const created = await onSave({ name: nm, price: pr, category: cat, unit });
+    setBusy(false);
+    if (!created) setErr("Could not save. Check your connection / permissions.");
+  };
+
+  return (
+    <Modal title="Add a new item" sub="Saved to the catalogue and added to this order" onClose={onClose} width={460}>
+      <div>
+        <label style={fieldLabel}>Item name *</label>
+        <input style={field} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Designer Kurti" autoFocus />
+      </div>
+      <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 14 }}>
+        <div>
+          <label style={fieldLabel}>Charged by</label>
+          <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            <button type="button" onClick={() => setUnit("piece")}
+              style={{ padding: "9px 0", borderRadius: 10, fontWeight: 600, fontSize: 12.5, cursor: "pointer",
+                border: unit === "piece" ? "none" : `1px solid ${C.border}`,
+                background: unit === "piece" ? C.teal : "#fff", color: unit === "piece" ? "#fff" : C.textMute }}>Per piece</button>
+            <button type="button" onClick={() => setUnit("kg")}
+              style={{ padding: "9px 0", borderRadius: 10, fontWeight: 600, fontSize: 12.5, cursor: "pointer",
+                border: unit === "kg" ? "none" : `1px solid ${C.border}`,
+                background: unit === "kg" ? C.teal : "#fff", color: unit === "kg" ? "#fff" : C.textMute }}>Per kg</button>
+          </div>
+        </div>
+        <div>
+          <label style={fieldLabel}>Price (₹) {unit === "kg" ? "per kg" : "per piece"} *</label>
+          <input style={field} type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.00" />
+        </div>
+      </div>
+      <div style={{ marginTop: 14 }}>
+        <label style={fieldLabel}>Category</label>
+        <select style={field} value={category} onChange={(e) => setCategory(e.target.value)}>
+          {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+          <option value="__new">+ New category…</option>
+        </select>
+      </div>
+      {category === "__new" && (
+        <div style={{ marginTop: 12 }}>
+          <label style={fieldLabel}>New category name</label>
+          <input style={field} value={newCat} onChange={(e) => setNewCat(e.target.value)} placeholder="e.g. Specials" />
+        </div>
+      )}
+      {err && <div style={{ background: C.redLt, color: C.red, fontSize: 12.5, fontWeight: 600, padding: "9px 12px", borderRadius: 9, marginTop: 14 }}>{err}</div>}
+      <div className="flex justify-end gap-2" style={{ marginTop: 18 }}>
+        <Btn variant="outline" small onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" small icon={Plus} onClick={save} disabled={busy}>Add &amp; continue</Btn>
+      </div>
+    </Modal>
   );
 }
