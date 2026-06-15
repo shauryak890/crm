@@ -160,35 +160,8 @@ input::placeholder { color: #B0BBC6; }
   }
 }
 
-/* ---------- Thermal sticker-roll print ----------
-   When printing tags on a narrow thermal label printer, tell the browser
-   the paper is a ~50mm roll (not A4) so it stops shrinking everything,
-   and put ONE big tag per label. Toggled by adding .wb-print-thermal to
-   <html> just before window.print(). */
-@media print {
-  html.wb-print-thermal { width: 50mm; }
-  html.wb-print-thermal .wb-print-area { padding: 2mm !important; }
-
-  /* The whole modal collapses to the label width. */
-  html.wb-print-thermal .wb-invoice-card { width: 50mm !important; }
-
-  /* Stack tags; one per physical label. */
-  html.wb-print-thermal .wb-tag-thermal {
-    display: block !important;
-  }
-  html.wb-print-thermal .wb-tag-thermal .wb-tag {
-    width: 46mm !important;
-    margin: 0 auto 0 auto !important;
-    border: 2px solid #000 !important;
-    page-break-after: always !important;
-    break-after: page !important;
-    page-break-inside: avoid !important;
-  }
-  html.wb-print-thermal .wb-tag-thermal .wb-tag:last-child {
-    page-break-after: auto !important;
-    break-after: auto !important;
-  }
-}
-
-@page wb-thermal { size: 50mm auto; margin: 2mm; }
-html.wb-print-thermal { page: wb-thermal; }
+/* Thermal sticker printing is handled by a dedicated popup window
+   (see printTags() in components/Invoice.jsx) — it builds a clean,
+   self-contained document with its own @page rules, so it prints
+   identically to A4 / PDF / a real thermal roll with no blank first
+   label and no dependence on hiding the app's DOM. */

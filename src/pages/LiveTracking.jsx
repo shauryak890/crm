@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Bike, MapPin, Phone, RefreshCw, UserPlus, Package, Link2, Check } from "lucide-react";
+import { Bike, MapPin, Phone, RefreshCw, UserPlus, Package, Link2, Check, UserCheck } from "lucide-react";
 import { C, DISPLAY } from "../theme";
 import { Card, PageHead, Badge, Btn, IconCircle, Modal, field, fieldLabel } from "../components/ui";
 import * as api from "../lib/api";
@@ -18,21 +18,25 @@ const DRIVER_LABEL = { free: "Available", on_task: "On task", off: "Off duty" };
 export default function LiveTracking({ toast }) {
   const [drivers, setDrivers] = useState([]);
   const [tasks, setTasks] = useState([]);
-  const [accounts, setAccounts] = useState([]); // driver-app signups
+  const [accounts, setAccounts] = useState([]); // all driver-app signups (legacy link modal)
+  const [pending, setPending] = useState([]); // signups awaiting approval at THIS outlet
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [linkFor, setLinkFor] = useState(null); // driver row being linked
+  const [approving, setApproving] = useState(null); // user_id being approved
 
   const load = useCallback(async () => {
     try {
-      const [d, t, acc] = await Promise.all([
+      const [d, t, acc, pend] = await Promise.all([
         api.fetchDrivers(),
         api.fetchTasks(),
         api.fetchDriverAccounts(),
+        api.fetchPendingDriverAccounts(),
       ]);
       setDrivers(d);
       setTasks(t);
       setAccounts(acc);
+      setPending(pend);
     } catch (e) {
       toast && toast("Load error: " + e.message);
     }
@@ -46,6 +50,21 @@ export default function LiveTracking({ toast }) {
     tasks.find((t) => t.driver_id === driverId && t.status !== "done" && t.status !== "cancelled");
 
   const openTasks = tasks.filter((t) => t.status !== "done" && t.status !== "cancelled");
+
+  // `pending` (this outlet's unapproved signups) comes from the
+  // pending_driver_accounts RPC — scoped server-side by the driver's
+  // chosen outlet code. Once approved they move into the drivers list.
+  const approve = async (account) => {
+    setApproving(account.id);
+    try {
+      await api.approveDriverAccount(account.id);
+      toast && toast(`${account.name || account.email} approved`);
+      await load();
+    } catch (e) {
+      toast && toast("Approve failed: " + e.message);
+    }
+    setApproving(null);
+  };
 
   return (
     <div>
@@ -62,18 +81,50 @@ export default function LiveTracking({ toast }) {
         <Stat label="Open tasks" value={openTasks.length} tone="teal" icon={Package} />
       </div>
 
+      {/* Pending approval — driver-app signups not yet approved */}
+      {!loading && pending.length > 0 && (
+        <Card style={{ marginBottom: 18, borderColor: C.amber, borderWidth: 1 }}>
+          <div className="flex items-center gap-2" style={{ marginBottom: 12 }}>
+            <UserCheck size={16} color={C.amber} />
+            <h3 style={{ fontFamily: DISPLAY, fontSize: 15, fontWeight: 800, color: C.navy }}>Pending approval</h3>
+            <Badge tone="warn">{pending.length}</Badge>
+          </div>
+          <p style={{ fontSize: 12.5, color: C.textMute, marginBottom: 14, lineHeight: 1.5 }}>
+            These drivers signed up in the app. Approve to add them to this outlet and let them receive tasks.
+          </p>
+          <div className="flex flex-col gap-2">
+            {pending.map((a) => (
+              <div key={a.id} className="flex items-center justify-between gap-3" style={{ padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 12 }}>
+                <div className="flex items-center gap-3" style={{ minWidth: 0 }}>
+                  <IconCircle icon={Bike} tone="amber" size={38} />
+                  <div style={{ minWidth: 0 }}>
+                    <p style={{ fontWeight: 700, color: C.navy, fontSize: 14 }}>{a.name || a.email.split("@")[0]}</p>
+                    <p style={{ fontSize: 12, color: C.textMute, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {a.phone ? `${a.phone} · ` : ""}{a.email}
+                    </p>
+                  </div>
+                </div>
+                <Btn small icon={UserCheck} onClick={() => approve(a)} disabled={approving === a.id}>
+                  {approving === a.id ? "Approving…" : "Approve"}
+                </Btn>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       {loading ? (
         <Card><p style={{ color: C.textMute, fontSize: 14, padding: 8 }}>Loading drivers…</p></Card>
-      ) : drivers.length === 0 ? (
+      ) : drivers.length === 0 && pending.length === 0 ? (
         <Card>
           <div style={{ textAlign: "center", padding: "32px 8px" }}>
             <div style={{ margin: "0 auto 14px" }}><IconCircle icon={Bike} tone="navy" size={52} /></div>
             <h3 style={{ fontFamily: DISPLAY, fontSize: 17, fontWeight: 800, color: C.navy }}>No drivers yet</h3>
-            <p style={{ color: C.textMute, fontSize: 13.5, maxWidth: 420, margin: "8px auto 0", lineHeight: 1.55 }}>
-              Add your pickup & delivery riders here. Once added, you can assign them to app-order pickups
-              from the App Orders screen.
+            <p style={{ color: C.textMute, fontSize: 13.5, maxWidth: 440, margin: "8px auto 0", lineHeight: 1.55 }}>
+              Ask your riders to sign up in the <strong>driver app</strong> — they’ll appear here under
+              “Pending approval” for you to approve in one tap. You can also add a driver manually.
             </p>
-            <div style={{ marginTop: 16 }}><Btn small icon={UserPlus} onClick={() => setAdding(true)}>Add your first driver</Btn></div>
+            <div style={{ marginTop: 16 }}><Btn small icon={UserPlus} onClick={() => setAdding(true)}>Add a driver manually</Btn></div>
           </div>
         </Card>
       ) : (

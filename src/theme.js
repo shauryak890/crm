@@ -52,6 +52,33 @@ export const KANBAN = [
   "Delivered",
 ];
 
+// App-order lifecycle (channel='app'). SAME lowercase vocabulary the
+// customer + driver apps read, so an outlet status change here flows live
+// to both apps. Pickup/delivery transitions are driver-driven; the outlet
+// owns the middle (at_outlet → washing → ready). Order matters: it's the
+// progression shown left→right on the app Kanban board.
+export const APP_LIFECYCLE = [
+  "pending_pickup",
+  "pickup_assigned",
+  "picked_up",
+  "at_outlet",
+  "washing",
+  "ready",
+  "out_for_delivery",
+  "delivered",
+];
+
+export const APP_LIFECYCLE_LABEL = {
+  pending_pickup: "Pending pickup",
+  pickup_assigned: "Driver assigned",
+  picked_up: "Picked up",
+  at_outlet: "At outlet",
+  washing: "Washing",
+  ready: "Ready",
+  out_for_delivery: "Out for delivery",
+  delivered: "Delivered",
+};
+
 export const SERVICE_TYPES = [
   "Laundry",
   "Ironing",

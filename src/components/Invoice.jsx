@@ -37,6 +37,87 @@ function Barcode({ value, height = 56, width = 1.8, displayValue = true }) {
 const fmtDate  = (s) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 const fmtDateTime = (s) => s ? new Date(s).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// Make a Code128 barcode PNG data-URL (no React/DOM needed).
+function barcodePng(value, { height = 60, width = 2.4 } = {}) {
+  try {
+    const canvas = document.createElement("canvas");
+    JsBarcode(canvas, String(value), {
+      format: "CODE128", height, width, fontSize: 14, textMargin: 2,
+      margin: 4, displayValue: true, background: "#ffffff", lineColor: "#000000",
+    });
+    return canvas.toDataURL("image/png");
+  } catch { return ""; }
+}
+
+// Open a clean popup window with `headHtml` (styles) + `bodyHtml`, wait
+// for it to lay out, then print. Printer-independent: A4, PDF and thermal
+// rolls all behave the same because the document contains ONLY the tags.
+function printDoc({ head = "", body = "", title = "Print" }) {
+  const w = window.open("", "_blank", "width=420,height=640");
+  if (!w) { alert("Please allow pop-ups for this site so tags can print."); return; }
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>${head}</head><body>${body}</body></html>`);
+  w.document.close();
+  // Give the barcode images a moment to decode, then print + close.
+  const go = () => { try { w.focus(); w.print(); } catch {} setTimeout(() => { try { w.close(); } catch {} }, 400); };
+  if (w.document.readyState === "complete") setTimeout(go, 300);
+  else w.onload = () => setTimeout(go, 300);
+}
+
+/* Build & print the per-garment sticker tags in a standalone document. */
+function printTags({ order, customer, units, size }) {
+  if (!units.length) { alert("No items to tag."); return; }
+  const total = units.length;
+  const thermal = size === "thermal";
+  // 50mm thermal label, or 2-up on A4.
+  const pageCss = thermal
+    ? `@page { size: 50mm auto; margin: 0; }`
+    : `@page { size: A4; margin: 8mm; }`;
+  const tagW = thermal ? "48mm" : "90mm";
+  const fontBase = thermal ? 11 : 11;
+
+  const tagHtml = units.map((u, i) => `
+    <div class="tag">
+      <div class="big">Order #${esc(order.order_no)}</div>
+      <div class="mid">Customer · ${esc(customer?.code || "CL—")}</div>
+      <div class="row"><span>In: ${esc(fmtDate(order.created_at))}</span><span>Due: ${esc(fmtDate(order.due_date))}</span></div>
+      <div class="name">${esc(u.product_name)}</div>
+      ${u.sublabel ? `<div class="sub">${esc(u.sublabel)}</div>` : ""}
+      <div class="bc"><img src="${barcodePng(`${order.order_no}-${i + 1}`, { height: thermal ? 64 : 40, width: thermal ? 2.4 : 1.6 })}"/></div>
+      <div class="count">${i + 1} / ${total}</div>
+      <div class="store">${esc(STORE.name.toUpperCase())}</div>
+    </div>`).join("");
+
+  const css = `<style>
+    ${pageCss}
+    * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    html, body { margin: 0; padding: 0; font-family: Arial, sans-serif; color: #000; }
+    .sheet { ${thermal ? "" : "display:flex;flex-wrap:wrap;gap:6mm;"} }
+    .tag {
+      width: ${tagW}; ${thermal ? "" : "flex:0 0 " + tagW + ";"}
+      border: 2px solid #000; border-radius: 6px;
+      padding: ${thermal ? "10px 8px" : "8px 10px"};
+      text-align: center; background: #fff;
+      page-break-inside: avoid; break-inside: avoid;
+      ${thermal ? "margin: 0 auto;" : ""}
+    }
+    ${thermal ? ".tag + .tag { page-break-before: always; break-before: page; }" : ""}
+    .big   { font-weight: 800; font-size: ${thermal ? 22 : 14}px; line-height: 1.1; }
+    .mid   { font-weight: 700; font-size: ${thermal ? 14 : 11.5}px; margin-top: 3px; }
+    .row   { display:flex; justify-content:center; gap:${thermal ? 12 : 6}px; font-size:${fontBase}px; font-weight:600; margin-top:3px; }
+    .name  { border-top:2px solid #000; border-bottom:2px solid #000; padding:${thermal ? 7 : 5}px 0; margin:${thermal ? 7 : 5}px 0; font-weight:800; font-size:${thermal ? 22 : 13}px; text-transform:uppercase; line-height:1.15; }
+    .sub   { font-weight:700; font-size:${thermal ? 15 : 11.5}px; margin:-2px 0 4px; }
+    .bc    { display:flex; justify-content:center; margin:${thermal ? 4 : 2}px 0; }
+    .bc img{ max-width:100%; image-rendering: crisp-edges; }
+    .count { font-weight:800; font-size:${thermal ? 24 : 14}px; }
+    .store { font-size:${thermal ? 11 : 9}px; letter-spacing:.08em; font-weight:700; }
+  </style>`;
+
+  printDoc({ head: css, body: `<div class="sheet">${tagHtml}</div>`, title: `Tags · #${order.order_no}` });
+}
+
 export default function Invoice({ order, customers = [], orders = [], onClose, initialMode = "invoice" }) {
   const [mode, setMode] = useState(initialMode); // 'invoice' | 'tags'
   const [tagSize, setTagSize] = useState("thermal"); // 'thermal' | 'sheet'
@@ -85,18 +166,18 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
   const totalTags = tagUnits.length;
 
   const onPrint = () => {
-    // Tell the print CSS which paper to assume: a narrow thermal label
-    // roll, or a normal A4 sheet. Set on <html> so @page can react.
-    const cls = mode === "tags" && tagSize === "thermal" ? "wb-print-thermal" : "wb-print-sheet";
-    document.documentElement.classList.add(cls);
-    const cleanup = () => {
-      document.documentElement.classList.remove("wb-print-thermal", "wb-print-sheet");
-      window.removeEventListener("afterprint", cleanup);
-    };
-    window.addEventListener("afterprint", cleanup);
-    window.print();
-    // Fallback cleanup in case afterprint doesn't fire.
-    setTimeout(cleanup, 1500);
+    if (mode === "tags") { printTags({ order, customer, units: tagUnits, size: tagSize }); return; }
+    // Invoice: clone the rendered invoice body into a clean A4 popup.
+    const area = document.querySelector(".wb-print-area");
+    if (!area) return;
+    const css = `<style>
+      @page { size: A4; margin: 12mm; }
+      * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      html, body { margin: 0; padding: 0; font-family: Arial, sans-serif; color: #111; }
+      img { max-width: 100%; }
+      table { width: 100%; border-collapse: collapse; }
+    </style>`;
+    printDoc({ head: css, body: `<div style="max-width:640px;margin:0 auto;">${area.innerHTML}</div>`, title: `Invoice · #${order.order_no}` });
   };
   const onWhatsApp = () => {
     if (!order.phone) { alert("No phone number on this order."); return; }
@@ -183,7 +264,7 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
 
         {/* footer (hidden when printing) */}
         <div className="wb-no-print flex items-center justify-between flex-wrap gap-2" style={{ padding: "12px 18px", borderTop: `1px solid ${C.borderSoft}`, background: "#FAFBFC" }}>
-          <span style={{ fontSize: 11.5, color: C.textFaint }}>Tip: use your browser's "Save as PDF" in the print dialog.</span>
+          <span style={{ fontSize: 11.5, color: C.textFaint }}>Print opens a clean window — allow pop-ups. "Sticker roll" = thermal labels, "A4 sheet" = a full page.</span>
           <div className="flex items-center gap-2">
             <Btn variant="outline" small onClick={onClose}>Close</Btn>
             <Btn variant="success" small icon={MessageCircle} onClick={onWhatsApp}>WhatsApp</Btn>

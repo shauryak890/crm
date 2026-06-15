@@ -40,7 +40,7 @@ export default function AppOrders({ toast }) {
   const [orders, setOrders] = useState([]);
   const [drivers, setDrivers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [assignFor, setAssignFor] = useState(null); // order being assigned
+  const [assignFor, setAssignFor] = useState(null); // { order, type } being assigned
   const [live, setLive] = useState(false);
 
   const load = useCallback(async () => {
@@ -105,14 +105,15 @@ export default function AppOrders({ toast }) {
       ) : (
         <div className="flex flex-col gap-3">
           {orders.map((o) => (
-            <OrderRow key={o.id} o={o} onAssign={() => setAssignFor(o)} />
+            <OrderRow key={o.id} o={o} onAssign={(type) => setAssignFor({ order: o, type })} />
           ))}
         </div>
       )}
 
       {assignFor && (
         <AssignModal
-          order={assignFor}
+          order={assignFor.order}
+          type={assignFor.type}
           drivers={drivers}
           onClose={() => setAssignFor(null)}
           onAssigned={async () => { setAssignFor(null); await load(); }}
@@ -139,7 +140,8 @@ function Stat({ label, value, tone, icon }) {
 }
 
 function OrderRow({ o, onAssign }) {
-  const assignable = o.order_status === "pending_pickup";
+  const pickupAssignable = o.order_status === "pending_pickup";
+  const deliveryAssignable = o.order_status === "ready";
   return (
     <Card hover>
       <div className="flex items-center justify-between gap-4" style={{ flexWrap: "wrap" }}>
@@ -163,28 +165,32 @@ function OrderRow({ o, onAssign }) {
 
         <div className="flex items-center gap-3">
           <span style={{ fontFamily: DISPLAY, fontWeight: 800, color: C.navy, fontSize: 16 }}>{inr(o.total)}</span>
-          {assignable
-            ? <Btn small icon={UserPlus} onClick={onAssign}>Assign driver</Btn>
-            : <Badge tone="info">Assigned</Badge>}
+          {pickupAssignable
+            ? <Btn small icon={UserPlus} onClick={() => onAssign("pickup")}>Assign pickup</Btn>
+            : deliveryAssignable
+            ? <Btn small icon={Bike} onClick={() => onAssign("delivery")}>Assign delivery</Btn>
+            : <Badge tone="info">{STATE_LABEL[o.order_status] || "Assigned"}</Badge>}
         </div>
       </div>
     </Card>
   );
 }
 
-function AssignModal({ order, drivers, onClose, onAssigned, onNeedDriver, toast }) {
+function AssignModal({ order, type = "pickup", drivers, onClose, onAssigned, onNeedDriver, toast }) {
   const [driverId, setDriverId] = useState(drivers[0]?.id || "");
   const [saving, setSaving] = useState(false);
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [newPhone, setNewPhone] = useState("");
+  const isDelivery = type === "delivery";
+  const verb = isDelivery ? "delivery" : "pickup";
 
   const submit = async () => {
     if (!driverId) { toast && toast("Pick a driver, or add one first"); return; }
     setSaving(true);
     try {
-      await api.assignDriver({ order_id: order.id, driver_id: driverId, type: "pickup" });
-      toast && toast(`Pickup assigned for #${order.order_no}`);
+      await api.assignDriver({ order_id: order.id, driver_id: driverId, type });
+      toast && toast(`${isDelivery ? "Delivery" : "Pickup"} assigned for #${order.order_no}`);
       await onAssigned();
     } catch (e) {
       toast && toast("Assign failed: " + e.message);
@@ -208,7 +214,7 @@ function AssignModal({ order, drivers, onClose, onAssigned, onNeedDriver, toast 
   };
 
   return (
-    <Modal title={`Assign driver · #${order.order_no}`} sub={order.customer_name} onClose={onClose} width={440}>
+    <Modal title={`Assign ${verb} · #${order.order_no}`} sub={order.customer_name} onClose={onClose} width={440}>
       {drivers.length === 0 && !adding && (
         <p style={{ fontSize: 13, color: C.textMute, marginBottom: 14, lineHeight: 1.5 }}>
           No drivers yet. Add one to assign this pickup.
@@ -231,7 +237,7 @@ function AssignModal({ order, drivers, onClose, onAssigned, onNeedDriver, toast 
             <Btn variant="ghost" small icon={UserPlus} onClick={() => setAdding(true)}>Add driver</Btn>
             <div className="flex items-center gap-2">
               <Btn variant="ghost" small onClick={onClose}>Cancel</Btn>
-              <Btn small onClick={submit} disabled={saving || drivers.length === 0}>{saving ? "Assigning…" : "Assign pickup"}</Btn>
+              <Btn small onClick={submit} disabled={saving || drivers.length === 0}>{saving ? "Assigning…" : `Assign ${verb}`}</Btn>
             </div>
           </div>
         </>

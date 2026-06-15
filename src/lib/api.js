@@ -461,9 +461,9 @@ export async function fetchDrivers() {
   return data;
 }
 
-// Driver-role accounts (people who signed up in the driver app). Used to
-// link a driver login to a `drivers` row. RLS lets a super_admin/admin
-// read profiles; we filter to role='driver'.
+// Driver-role accounts (people who signed up in the driver app). Used by
+// the legacy "Link driver app" modal. RLS lets a super_admin/admin read
+// profiles; we filter to role='driver'.
 export async function fetchDriverAccounts() {
   const { data, error } = await supabase
     .from("profiles")
@@ -474,12 +474,26 @@ export async function fetchDriverAccounts() {
   return data;
 }
 
-// Link a drivers row to a driver-app auth account (sets drivers.user_id).
+// Driver signups awaiting approval AT THIS OUTLET (scoped server-side by
+// the driver's chosen outlet code → requested_outlet_id; migration 0018).
+// Excludes anyone already linked to a drivers row. Legacy no-code signups
+// surface to every outlet as a fallback.
+export async function fetchPendingDriverAccounts() {
+  const { data, error } = await supabase.rpc("pending_driver_accounts");
+  if (error) throw error;
+  return data ?? [];
+}
+
+// Link a drivers row to a driver-app auth account. Uses the
+// link_driver_account RPC (migration 0016) which sets drivers.user_id AND
+// backfills the driver's name/phone from their signup profile (only filling
+// blanks), so the driver app — which reads the drivers row — shows their
+// real details.
 export async function linkDriverAccount(driverId, userId) {
-  const { error } = await supabase
-    .from("drivers")
-    .update({ user_id: userId })
-    .eq("id", driverId);
+  const { error } = await supabase.rpc("link_driver_account", {
+    p_driver_id: driverId,
+    p_user_id: userId,
+  });
   if (error) throw error;
 }
 
@@ -489,6 +503,18 @@ export async function createDriver({ name, phone }) {
     .insert({ name, phone })
     .select()
     .single();
+  if (error) throw error;
+  return data;
+}
+
+// Approve a driver-app signup in one click: creates a drivers row for this
+// outlet, copies the signup name/phone, and links it to the auth account
+// (RPC approve_driver_account, migration 0017). Idempotent. Returns the
+// drivers.id.
+export async function approveDriverAccount(userId) {
+  const { data, error } = await supabase.rpc("approve_driver_account", {
+    p_user_id: userId,
+  });
   if (error) throw error;
   return data;
 }
@@ -505,9 +531,11 @@ export async function fetchTasks() {
 }
 
 // Manager assigns a driver to an app order (manual assignment — the
-// launch model). Writes a tasks row and nudges the order into the
-// pickup_assigned state so the app/CRM reflect it. outlet_id is stamped
-// by the column DEFAULT (current_outlet_id()), so we don't send it.
+// launch model). Writes a tasks row. For a PICKUP we nudge the order into
+// pickup_assigned so the apps reflect it; for a DELIVERY we leave the
+// status alone (it's 'ready' — the driver advances it to out_for_delivery
+// when they collect from the outlet). outlet_id is stamped by the column
+// DEFAULT (current_outlet_id()), so we don't send it.
 export async function assignDriver({ order_id, driver_id, type = "pickup" }) {
   const { data: task, error } = await supabase
     .from("tasks")
@@ -515,9 +543,11 @@ export async function assignDriver({ order_id, driver_id, type = "pickup" }) {
     .select()
     .single();
   if (error) throw error;
-  // Best-effort status bump + driver flag; don't fail the assignment if
-  // these secondary updates hiccup.
-  await supabase.from("orders").update({ order_status: "pickup_assigned" }).eq("id", order_id);
+  // Best-effort status bump (pickup only) + driver flag; don't fail the
+  // assignment if these secondary updates hiccup.
+  if (type === "pickup") {
+    await supabase.from("orders").update({ order_status: "pickup_assigned" }).eq("id", order_id);
+  }
   if (driver_id) await supabase.from("drivers").update({ status: "on_task" }).eq("id", driver_id);
   return task;
 }
