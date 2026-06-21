@@ -484,6 +484,14 @@ export async function fetchPendingDriverAccounts() {
   return data ?? [];
 }
 
+// The caller's own outlet (code + name) — for showing staff the join code
+// to share with new drivers. (migration 0018)
+export async function fetchMyOutlet() {
+  const { data, error } = await supabase.rpc("my_outlet");
+  if (error) throw error;
+  return Array.isArray(data) ? data[0] || null : data || null;
+}
+
 // Link a drivers row to a driver-app auth account. Uses the
 // link_driver_account RPC (migration 0016) which sets drivers.user_id AND
 // backfills the driver's name/phone from their signup profile (only filling

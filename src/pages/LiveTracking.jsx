@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Bike, MapPin, Phone, RefreshCw, UserPlus, Package, Link2, Check, UserCheck } from "lucide-react";
+import { Bike, MapPin, Phone, RefreshCw, UserPlus, Package, Link2, Check, UserCheck, Copy } from "lucide-react";
 import { C, DISPLAY } from "../theme";
 import { Card, PageHead, Badge, Btn, IconCircle, Modal, field, fieldLabel } from "../components/ui";
 import * as api from "../lib/api";
@@ -20,6 +20,8 @@ export default function LiveTracking({ toast }) {
   const [tasks, setTasks] = useState([]);
   const [accounts, setAccounts] = useState([]); // all driver-app signups (legacy link modal)
   const [pending, setPending] = useState([]); // signups awaiting approval at THIS outlet
+  const [outlet, setOutlet] = useState(null); // this manager's outlet (for the join code)
+  const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [linkFor, setLinkFor] = useState(null); // driver row being linked
@@ -27,16 +29,18 @@ export default function LiveTracking({ toast }) {
 
   const load = useCallback(async () => {
     try {
-      const [d, t, acc, pend] = await Promise.all([
+      const [d, t, acc, pend, out] = await Promise.all([
         api.fetchDrivers(),
         api.fetchTasks(),
         api.fetchDriverAccounts(),
         api.fetchPendingDriverAccounts(),
+        api.fetchMyOutlet(),
       ]);
       setDrivers(d);
       setTasks(t);
       setAccounts(acc);
       setPending(pend);
+      setOutlet(out);
     } catch (e) {
       toast && toast("Load error: " + e.message);
     }
@@ -66,6 +70,17 @@ export default function LiveTracking({ toast }) {
     setApproving(null);
   };
 
+  const copyCode = async () => {
+    if (!outlet?.code) return;
+    try {
+      await navigator.clipboard.writeText(outlet.code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      toast && toast(`Outlet code: ${outlet.code}`);
+    }
+  };
+
   return (
     <div>
       <PageHead title="Live Tracking & Drivers" sub="Pickup & delivery riders and their current jobs">
@@ -80,6 +95,35 @@ export default function LiveTracking({ toast }) {
         <Stat label="Available now" value={drivers.filter((d) => d.status === "free").length} tone="green" icon={Bike} />
         <Stat label="Open tasks" value={openTasks.length} tone="teal" icon={Package} />
       </div>
+
+      {/* Join-code banner — what a manager tells a new driver to enter at
+          signup. The driver enters this code in the driver app, then the
+          manager approves them below. */}
+      {outlet?.code && (
+        <Card style={{ marginBottom: 22, background: C.navy }}>
+          <div className="flex items-center justify-between gap-4" style={{ flexWrap: "wrap" }}>
+            <div style={{ minWidth: 240 }}>
+              <p style={{ color: "#9FBECB", fontSize: 12.5, fontWeight: 600 }}>Add a driver to {outlet.name}</p>
+              <p style={{ color: "#fff", fontSize: 13.5, marginTop: 4, lineHeight: 1.5, maxWidth: 460 }}>
+                Tell your new driver to sign up in the Rider app and enter this outlet code.
+                Then approve them below — they can only join once you do.
+              </p>
+            </div>
+            <button
+              onClick={copyCode}
+              className="wb-press inline-flex items-center gap-2"
+              style={{
+                background: "#fff", border: "none", borderRadius: 12, cursor: "pointer",
+                padding: "12px 16px",
+              }}>
+              <span style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 20, color: C.navy, letterSpacing: ".04em" }}>{outlet.code}</span>
+              {copied
+                ? <Check size={16} color={C.green} />
+                : <Copy size={16} color={C.tealDark} />}
+            </button>
+          </div>
+        </Card>
+      )}
 
       {/* Pending approval — driver-app signups not yet approved */}
       {!loading && pending.length > 0 && (
@@ -121,7 +165,7 @@ export default function LiveTracking({ toast }) {
             <div style={{ margin: "0 auto 14px" }}><IconCircle icon={Bike} tone="navy" size={52} /></div>
             <h3 style={{ fontFamily: DISPLAY, fontSize: 17, fontWeight: 800, color: C.navy }}>No drivers yet</h3>
             <p style={{ color: C.textMute, fontSize: 13.5, maxWidth: 440, margin: "8px auto 0", lineHeight: 1.55 }}>
-              Ask your riders to sign up in the <strong>driver app</strong> — they’ll appear here under
+              Ask your riders to sign up in the <strong>Rider app</strong> — they’ll appear here under
               “Pending approval” for you to approve in one tap. You can also add a driver manually.
             </p>
             <div style={{ marginTop: 16 }}><Btn small icon={UserPlus} onClick={() => setAdding(true)}>Add a driver manually</Btn></div>
@@ -142,7 +186,7 @@ export default function LiveTracking({ toast }) {
                       {d.user_id ? (
                         <span className="inline-flex items-center gap-1" style={{ fontSize: 11.5, color: C.green, fontWeight: 600, marginTop: 3 }}><Check size={12} /> App linked</span>
                       ) : (
-                        <button onClick={() => setLinkFor(d)} className="inline-flex items-center gap-1" style={{ fontSize: 11.5, color: C.tealDark, fontWeight: 600, marginTop: 3, background: "none", border: "none", cursor: "pointer", padding: 0 }}><Link2 size={12} /> Link driver app</button>
+                        <button onClick={() => setLinkFor(d)} className="inline-flex items-center gap-1" style={{ fontSize: 11.5, color: C.tealDark, fontWeight: 600, marginTop: 3, background: "none", border: "none", cursor: "pointer", padding: 0 }}><Link2 size={12} /> Link Rider app</button>
                       )}
                     </div>
                   </div>
@@ -211,7 +255,7 @@ function LinkAccountModal({ driver, accounts, linkedUserIds, onClose, onLinked, 
   };
 
   return (
-    <Modal title={`Link ${driver.name}`} sub="Connect this driver to their driver-app login" onClose={onClose} width={440}>
+    <Modal title={`Link ${driver.name}`} sub="Connect this driver to their Rider app login" onClose={onClose} width={440}>
       {available.length === 0 ? (
         <p style={{ fontSize: 13.5, color: C.textMute, lineHeight: 1.55 }}>
           No unlinked driver accounts yet. Ask the driver to sign up in the driver app first — their

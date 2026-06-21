@@ -84,6 +84,7 @@ function printTags({ order, customer, units, size }) {
       <div class="mid">Customer · ${esc(customer?.code || "CL—")}</div>
       <div class="row"><span>In: ${esc(fmtDate(order.created_at))}</span><span>Due: ${esc(fmtDate(order.due_date))}</span></div>
       <div class="name">${esc(u.product_name)}</div>
+      ${u.service_type ? `<div class="svc">${esc(u.service_type)}</div>` : ""}
       ${u.sublabel ? `<div class="sub">${esc(u.sublabel)}</div>` : ""}
       <div class="bc"><img src="${barcodePng(`${order.order_no}-${i + 1}`, { height: thermal ? 64 : 40, width: thermal ? 2.4 : 1.6 })}"/></div>
       <div class="count">${i + 1} / ${total}</div>
@@ -108,6 +109,7 @@ function printTags({ order, customer, units, size }) {
     .mid   { font-weight: 700; font-size: ${thermal ? 14 : 11.5}px; margin-top: 3px; }
     .row   { display:flex; justify-content:center; gap:${thermal ? 12 : 6}px; font-size:${fontBase}px; font-weight:600; margin-top:3px; }
     .name  { border-top:2px solid #000; border-bottom:2px solid #000; padding:${thermal ? 7 : 5}px 0; margin:${thermal ? 7 : 5}px 0; font-weight:800; font-size:${thermal ? 22 : 13}px; text-transform:uppercase; line-height:1.15; }
+    .svc   { font-weight:700; font-size:${thermal ? 13 : 10.5}px; margin:2px 0; line-height:1.2; }
     .sub   { font-weight:700; font-size:${thermal ? 15 : 11.5}px; margin:-2px 0 4px; }
     .bc    { display:flex; justify-content:center; margin:${thermal ? 4 : 2}px 0; }
     .bc img{ max-width:100%; image-rendering: crisp-edges; }

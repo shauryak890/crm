@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Printer, FileText, Pencil, Trash2, CalendarClock, History, X, MessageCircle } from "lucide-react";
-import { C, KANBAN, PAYMENT_METHODS, DELAY_REASONS, STORE, inr, balanceDue } from "../theme";
+import { C, KANBAN, APP_LIFECYCLE, APP_LIFECYCLE_LABEL, PAYMENT_METHODS, DELAY_REASONS, STORE, inr, balanceDue } from "../theme";
 import { PageHead, Btn, Badge, DataTable, Modal, td, iconBtn, field, fieldLabel } from "../components/ui";
 import * as api from "../lib/api";
 
@@ -65,10 +65,23 @@ export default function Sales({
             <td style={td}><Badge tone={o.delivery_status === "Delivered" ? "success" : "warn"}>{o.delivery_status}</Badge></td>
             <td style={td}><Badge tone="navy">{o.payment_method}</Badge></td>
             <td style={td}>
-              <select value={o.order_status} onChange={(e) => onStatus(o.id, e.target.value)}
-                style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "7px 10px", fontSize: 12.5, fontWeight: 600, color: C.navy, background: "#fff", maxWidth: 180 }}>
-                {KANBAN.map((s) => <option key={s}>{s}</option>)}
-              </select>
+              {(() => {
+                // App orders use the lowercase lifecycle vocabulary; walk-ins
+                // use the KANBAN labels. Pick the right option set per channel
+                // so an app order's status (e.g. "pending_pickup") is editable.
+                const isApp = o.channel === "app" || APP_LIFECYCLE.includes(o.order_status);
+                const opts = isApp ? APP_LIFECYCLE : KANBAN;
+                const label = (s) => (isApp ? (APP_LIFECYCLE_LABEL[s] || s) : s);
+                // If the current value isn't in the option set, surface it so
+                // the select still shows the real status rather than snapping.
+                const options = opts.includes(o.order_status) ? opts : [o.order_status, ...opts];
+                return (
+                  <select value={o.order_status} onChange={(e) => onStatus(o.id, e.target.value)}
+                    style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "7px 10px", fontSize: 12.5, fontWeight: 600, color: C.navy, background: "#fff", maxWidth: 190 }}>
+                    {options.map((s) => <option key={s} value={s}>{label(s)}</option>)}
+                  </select>
+                );
+              })()}
             </td>
             <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
               <div className="inline-flex items-center gap-1">

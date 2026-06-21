@@ -76,7 +76,7 @@ export default function Users({ profiles, loading, onRefresh, toast }) {
             </td>
             <td style={{ ...td, color: C.textMute }}>{u.email}</td>
             <td style={td}><Badge tone={u.role === "admin" ? "info" : "muted"}>{u.role}</Badge></td>
-            <td style={{ ...td, color: C.textMute }}>{u.outlet || "Main Outlet"}</td>
+            <td style={{ ...td, color: C.textMute }}>{u.outlet || "—"}</td>
           </tr>
         )}
       />

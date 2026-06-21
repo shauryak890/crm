@@ -103,6 +103,8 @@ export default function App() {
   const [expenses, setExpenses] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [orderItems, setOrderItems] = useState([]);
+  const [outlets, setOutlets] = useState([]);
+  const [billingOutletId, setBillingOutletId] = useState("");  // super-admin's chosen outlet for POS
   const [loading, setLoading] = useState(true);
   const [invoiceOrder, setInvoiceOrder] = useState(null);
   const [focusMode, setFocusMode] = useState(false);
@@ -141,12 +143,13 @@ export default function App() {
     if (!session) return;
     setLoading(true);
     try {
-      const [prod, cust, ord, exp, profs, items] = await Promise.all([
+      const [prod, cust, ord, exp, profs, items, outs] = await Promise.all([
         api.fetchProducts(), api.fetchCustomers(), api.fetchOrders(),
         api.fetchExpenses(), api.fetchProfiles(), api.fetchOrderItems(),
+        api.fetchOutlets().catch(() => []),
       ]);
       setProducts(prod); setCustomers(cust); setOrders(ord);
-      setExpenses(exp); setProfiles(profs); setOrderItems(items);
+      setExpenses(exp); setProfiles(profs); setOrderItems(items); setOutlets(outs);
       setProfile(profs.find((p) => p.id === session.user.id) || null);
     } catch (e) {
       toast("Load error: " + e.message);
@@ -197,7 +200,9 @@ export default function App() {
   const onStatus = async (id, status) => {
     setOrders((p) => p.map((o) => (o.id === id ? { ...o, order_status: status } : o)));
     try {
-      if (status === "Delivered") {
+      // Walk-in orders use "Delivered"; app orders use "delivered". Treat
+      // both as the terminal state that clears the prior-damage record.
+      if (String(status).toLowerCase() === "delivered") {
         // Once an order is delivered, the prior-damage record has served
         // its purpose. Wipe the photos from Storage and clear both
         // columns in one update. The DB has a safety-net trigger too.
@@ -316,7 +321,9 @@ export default function App() {
           </div>
           <div>
             <p style={{ color: C.navy, fontWeight: 700, fontSize: 15, lineHeight: 1, letterSpacing: "-.01em" }}>Whites &amp; Brights</p>
-            <p style={{ color: C.textFaint, fontSize: 10.5, fontWeight: 500, letterSpacing: ".05em", marginTop: 4 }}>Store · {profile?.outlet || "—"}</p>
+            <p style={{ color: C.textFaint, fontSize: 10.5, fontWeight: 500, letterSpacing: ".05em", marginTop: 4 }}>
+              {isSuperAdmin ? "HQ · All outlets" : `Store · ${profile?.outlet || "—"}`}
+            </p>
           </div>
         </div>
 
@@ -379,7 +386,8 @@ export default function App() {
           {ADMIN_VIEWS.has(view) && !isAdmin ? <AccessDenied /> : (
             <>
           {view === "dashboard" && <Dashboard orders={orders} go={go} displayName={displayName} customers={customers} />}
-          {view === "pos" && <POS products={products} customers={customers} orders={orders} onPay={onPay} focusMode={focusMode} setFocusMode={setFocusMode} isAdmin={isAdmin} onQuickAddProduct={onQuickAddProduct} />}
+          {view === "pos" && <POS products={products} customers={customers} orders={orders} onPay={onPay} focusMode={focusMode} setFocusMode={setFocusMode} isAdmin={isAdmin} onQuickAddProduct={onQuickAddProduct}
+            isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} />}
           {view === "sales" && <Sales orders={orders} loading={loading} products={products} isAdmin={isAdmin}
             onStatus={onStatus} onTogglePaid={onTogglePaid} onOpenInvoice={setInvoiceOrder}
             onEditOrder={onEditOrder} onDeleteOrder={onDeleteOrder} onQuickAddProduct={onQuickAddProduct}

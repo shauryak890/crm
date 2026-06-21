@@ -66,6 +66,14 @@ export default function AppOrders({ toast }) {
     return () => { clearTimeout(t); api.unsubscribe(ch); };
   }, [load]);
 
+  // Advance an app order through its lifecycle from the CRM. Optimistic
+  // update, then persist; the realtime subscription keeps the apps in sync.
+  const onStatus = useCallback(async (id, status) => {
+    setOrders((p) => p.map((o) => (o.id === id ? { ...o, order_status: status } : o)));
+    try { await api.updateOrderStatus(id, status); }
+    catch (e) { toast && toast("Update failed: " + e.message); load(); }
+  }, [toast, load]);
+
   const pending = orders.filter((o) => o.order_status === "pending_pickup");
   const active = orders.filter((o) => o.order_status !== "pending_pickup" && o.order_status !== "delivered");
   const done = orders.filter((o) => o.order_status === "delivered");
@@ -105,7 +113,7 @@ export default function AppOrders({ toast }) {
       ) : (
         <div className="flex flex-col gap-3">
           {orders.map((o) => (
-            <OrderRow key={o.id} o={o} onAssign={(type) => setAssignFor({ order: o, type })} />
+            <OrderRow key={o.id} o={o} onAssign={(type) => setAssignFor({ order: o, type })} onStatus={onStatus} />
           ))}
         </div>
       )}
@@ -139,9 +147,17 @@ function Stat({ label, value, tone, icon }) {
   );
 }
 
-function OrderRow({ o, onAssign }) {
+// Stages an outlet can set manually from the CRM. (Pickup/delivery are
+// driven by the Assign buttons + the driver app, but the in-plant stages
+// and the final delivered mark are the outlet's to advance.)
+const APP_STAGES = ["picked_up", "at_outlet", "washing", "ready", "out_for_delivery", "delivered"];
+
+function OrderRow({ o, onAssign, onStatus }) {
   const pickupAssignable = o.order_status === "pending_pickup";
   const deliveryAssignable = o.order_status === "ready";
+  // Show a status dropdown once the bag is in the plant's hands.
+  const showStatus = !pickupAssignable;
+  const stageOptions = APP_STAGES.includes(o.order_status) ? APP_STAGES : [o.order_status, ...APP_STAGES];
   return (
     <Card hover>
       <div className="flex items-center justify-between gap-4" style={{ flexWrap: "wrap" }}>
@@ -163,13 +179,19 @@ function OrderRow({ o, onAssign }) {
           {o.phone && <p className="inline-flex items-center gap-1.5" style={{ fontSize: 12.5, color: C.textMute, marginTop: 3 }}><Phone size={13} /> {o.phone}</p>}
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3" style={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
           <span style={{ fontFamily: DISPLAY, fontWeight: 800, color: C.navy, fontSize: 16 }}>{inr(o.total)}</span>
+          {showStatus && (
+            <select value={o.order_status} onChange={(e) => onStatus(o.id, e.target.value)}
+              style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 10px", fontSize: 12.5, fontWeight: 600, color: C.navy, background: "#fff" }}>
+              {stageOptions.map((s) => <option key={s} value={s}>{STATE_LABEL[s] || s}</option>)}
+            </select>
+          )}
           {pickupAssignable
             ? <Btn small icon={UserPlus} onClick={() => onAssign("pickup")}>Assign pickup</Btn>
             : deliveryAssignable
             ? <Btn small icon={Bike} onClick={() => onAssign("delivery")}>Assign delivery</Btn>
-            : <Badge tone="info">{STATE_LABEL[o.order_status] || "Assigned"}</Badge>}
+            : null}
         </div>
       </div>
     </Card>

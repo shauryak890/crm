@@ -28,7 +28,8 @@ const splitName = (full) => {
   return { first_name: parts[0] || "", last_name: parts.slice(1).join(" ") };
 };
 
-export default function POS({ products, customers, orders = [], onPay, focusMode, setFocusMode, isAdmin, onQuickAddProduct }) {
+export default function POS({ products, customers, orders = [], onPay, focusMode, setFocusMode, isAdmin, onQuickAddProduct,
+  isSuperAdmin, outlets = [], billingOutletId, setBillingOutletId }) {
   const [cart, setCart] = useState([]);
   const [modal, setModal] = useState(null);          // product object
   const [editingKey, setEditingKey] = useState(null); // cart key being edited (null = adding new)
@@ -36,6 +37,9 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
   const cartRef = useRef(null);                       // cart items block
   const [svc, setSvc] = useState("Laundry");
   const [express, setExpress] = useState(false);
+  // Extra services ticked onto the SAME garment (e.g. Dry Clean + Starching
+  // + Steam Press). Each is a catalogue product; its price adds to the line.
+  const [addons, setAddons] = useState([]);          // [{ id, name, price }]
   const [qty, setQty] = useState(1);                 // piece count
   const [weight, setWeight] = useState("1");          // kg for kg-priced items
   const [method, setMethod] = useState("UPI");
@@ -84,8 +88,10 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
   // Quick-add a missing product to the catalogue from the counter.
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const handleQuickAdd = async (payload) => {
-    // payload = { name, price, category, unit } → create + open service modal
-    const created = await onQuickAddProduct(payload);
+    // payload = { name, price, category, unit } → create + open service modal.
+    // A super-admin has no home outlet, so stamp the chosen billing outlet.
+    const withOutlet = isSuperAdmin && billingOutletId ? { ...payload, outlet_id: billingOutletId } : payload;
+    const created = await onQuickAddProduct(withOutlet);
     if (created) {
       setQuickAddOpen(false);
       setModal(created);      // straight into the "select service" flow
@@ -122,12 +128,22 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
     if (!address.trim() && matched.address) setAddress(matched.address);
   }, [matched]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const categories = useMemo(() => {
-    const set = new Set(products.map((p) => p.category || "General"));
-    return ["All", ...Array.from(set).sort()];
-  }, [products]);
+  // A super-admin sees ALL outlets' products (RLS bypass). Once they've
+  // picked a billing outlet, the grid must show ONLY that outlet's
+  // catalogue. Regular staff already get just their own via RLS.
+  const outletProducts = useMemo(() => {
+    if (isSuperAdmin && billingOutletId) {
+      return products.filter((p) => p.outlet_id === billingOutletId);
+    }
+    return products;
+  }, [products, isSuperAdmin, billingOutletId]);
 
-  const visible = products.filter((p) => {
+  const categories = useMemo(() => {
+    const set = new Set(outletProducts.map((p) => p.category || "General"));
+    return ["All", ...Array.from(set).sort()];
+  }, [outletProducts]);
+
+  const visible = outletProducts.filter((p) => {
     const matchesQuery = p.name.toLowerCase().includes(search.toLowerCase());
     const matchesCat = category === "All" || (p.category || "General") === category;
     return matchesQuery && matchesCat;
@@ -135,8 +151,14 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
 
   const closeModal = () => {
     setModal(null); setEditingKey(null);
-    setQty(1); setWeight("1"); setExpress(false); setSvc("Laundry"); setErr("");
+    setQty(1); setWeight("1"); setExpress(false); setSvc("Laundry"); setAddons([]); setErr("");
   };
+
+  const toggleAddon = (p) => setAddons((cur) =>
+    cur.some((a) => a.id === p.id)
+      ? cur.filter((a) => a.id !== p.id)
+      : [...cur, { id: p.id, name: p.name, price: Number(p.price) || 0 }]
+  );
 
   const editItem = (item) => {
     // Reopen the modal pre-filled with the cart line's values.
@@ -148,6 +170,7 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
     setExpress(!!item.express);
     setQty(item.qty || 1);
     setWeight(item.weight_kg != null ? String(item.weight_kg) : "1");
+    setAddons(Array.isArray(item.addons) ? item.addons : []);
   };
 
   const add = () => {
@@ -160,18 +183,25 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
       return;
     }
     const multiplier = express ? 1.6 : 1;
+    // Add-on services are per-garment: their price applies to each piece.
+    const addonSum = addons.reduce((a, x) => a + Number(x.price || 0), 0);
+    const perPiece = base + addonSum;
     const price = isKg
-      ? Math.round(base * w * multiplier)
-      : Math.round(base * qty * multiplier);
+      ? Math.round(base * w * multiplier)                 // kg lines: weight × base (add-ons rare here)
+        + Math.round(addonSum * Math.max(1, qty) * multiplier)
+      : Math.round(perPiece * qty * multiplier);
+    // The service label for the tag combines the base service + add-ons.
+    const serviceLabel = [svc, ...addons.map((a) => a.name)].join(" + ");
     const entry = {
       key: editingKey || Date.now(),
       product_name: modal.name,
-      service_type: svc,
+      service_type: serviceLabel,
+      addons,                                              // kept for editing
       express,
       qty: isKg ? Math.max(1, qty) : qty,
       weight_kg: isKg ? w : null,
       unit,
-      unit_price: base,
+      unit_price: isKg ? base : perPiece,
       line_total: price,
     };
     const wasAdding = !editingKey;
@@ -228,6 +258,12 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
     if (!phone.trim())   { setErr("Phone number is required."); return; }
     if (!dueDate)        { setErr("Delivery date is required."); return; }
     if (!address.trim()) { setErr("Address is required."); return; }
+    // A super-admin has no home outlet — they must pick which store the
+    // order belongs to before billing.
+    if (isSuperAdmin && !billingOutletId) {
+      setErr("Pick the outlet this order belongs to (top of the cart).");
+      return;
+    }
     if (blockBill) {
       setErr(`${fmtDay(dueDate)} is full (${bookedToday}/${DAILY_CAPACITY} clothes). Pick a free day — earliest is ${fmtDay(earliestFree)}.`);
       return;
@@ -239,6 +275,10 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
 
     setBusy(true);
     try {
+      // For a super-admin the row's outlet_id can't come from the DB
+      // default (they have no home outlet), so stamp the chosen outlet.
+      const outletStamp = isSuperAdmin && billingOutletId ? { outlet_id: billingOutletId } : {};
+
       // Match by phone, otherwise create a new customer so their history
       // accumulates across visits.
       let customer = matched;
@@ -249,6 +289,7 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
           last_name,
           phone: phone.trim(),
           address: address.trim(),
+          ...outletStamp,
         });
       }
 
@@ -279,8 +320,11 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
         channel: "walk-in",
         damage_note: damageNote.trim() || null,
         image_urls,
+        ...outletStamp,
       };
-      const items = cart.map(({ key, ...rest }) => rest);
+      // Strip frontend-only fields (`key`, `addons`) — they aren't columns
+      // on order_items. `service_type` already holds the combined label.
+      const items = cart.map(({ key, addons, ...rest }) => rest);
       const ok = await onPay(order, items);
       if (ok) {
         setCart([]); setDisc(0); setTax(0); setAmountReceived("");
@@ -337,12 +381,16 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
             </div>
           </div>
           <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(118px,1fr))", padding: 16, flex: 1, minHeight: 0, overflowY: "auto", alignContent: "start" }}>
-            {visible.length === 0 && (
-              <div style={{ gridColumn: "1/-1", padding: "48px 0", textAlign: "center", color: C.textFaint, fontSize: 13 }}>
-                No products. Load your price list (seed_catalogue.sql) or add products in the catalogue.
+            {isSuperAdmin && !billingOutletId ? (
+              <div style={{ gridColumn: "1/-1", padding: "48px 16px", textAlign: "center", color: C.textFaint, fontSize: 13.5, lineHeight: 1.6 }}>
+                Select a <b style={{ color: C.navy }}>billing outlet</b> (top of the cart) to load its catalogue.
               </div>
-            )}
-            {visible.map((p) => (
+            ) : visible.length === 0 ? (
+              <div style={{ gridColumn: "1/-1", padding: "48px 0", textAlign: "center", color: C.textFaint, fontSize: 13 }}>
+                No products for this outlet. Add items via the Catalogue, or the "New item" button above.
+              </div>
+            ) : null}
+            {(!isSuperAdmin || billingOutletId) && visible.map((p) => (
               <button key={p.id} onClick={() => setModal(p)}
                 className="flex flex-col items-center justify-center rounded-xl"
                 style={{ background: "#F7FAFB", border: `1px solid ${C.borderSoft}`, padding: "16px 8px", cursor: "pointer", borderTop: `3px solid ${C.teal}` }}>
@@ -365,6 +413,18 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
               the cart line is never starved of space. */}
           <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           <div style={{ padding: 18, borderBottom: `1px solid ${C.borderSoft}`, display: "flex", flexDirection: "column", gap: 12 }}>
+            {isSuperAdmin && (
+              <div style={{ background: C.navy, borderRadius: 10, padding: "10px 12px" }}>
+                <label className="wb-eyebrow" style={{ color: "#9FB5C5", display: "block", marginBottom: 6 }}>Billing for outlet *</label>
+                <select value={billingOutletId || ""} onChange={(e) => setBillingOutletId(e.target.value)}
+                  style={{ width: "100%", border: "none", borderRadius: 8, padding: "9px 11px", fontSize: 13.5, fontWeight: 600, color: C.navy, background: "#fff", outline: "none" }}>
+                  <option value="">— Select outlet —</option>
+                  {outlets.filter((o) => o.active !== false).map((o) => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="flex items-center justify-between" style={{ marginBottom: -4 }}>
               <span className="wb-eyebrow">Client</span>
               <button type="button" onClick={() => setPickerOpen(true)}
@@ -651,54 +711,94 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
               </div>
               <button onClick={closeModal} style={iconBtn("#EEF2F5", C.textMute)}><X size={16} /></button>
             </div>
-            <div className="grid gap-4" style={{ gridTemplateColumns: "1fr 1fr", padding: 24 }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {SERVICE_TYPES.map((s) => (
-                  <button key={s} onClick={() => setSvc(s)}
-                    style={{ textAlign: "left", padding: "11px 14px", borderRadius: 11, fontWeight: 700, fontSize: 13, cursor: "pointer", border: "none",
-                      background: svc === s ? C.navy : "#F2F6F9", color: svc === s ? "#fff" : C.text }}>{s}</button>
-                ))}
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
-                  <button onClick={() => setExpress(false)} style={tog(!express)}>Normal</button>
-                  <button onClick={() => setExpress(true)} style={tog(express)}>Express</button>
+            <div style={{ padding: 24, maxHeight: "70vh", overflowY: "auto" }}>
+              <div className="grid gap-4" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <label style={posLbl}>Service type</label>
+                  {SERVICE_TYPES.map((s) => (
+                    <button key={s} onClick={() => setSvc(s)}
+                      style={{ textAlign: "left", padding: "11px 14px", borderRadius: 11, fontWeight: 700, fontSize: 13, cursor: "pointer", border: "none",
+                        background: svc === s ? C.navy : "#F2F6F9", color: svc === s ? "#fff" : C.text }}>{s}</button>
+                  ))}
                 </div>
-                {modal.unit === "kg" ? (
-                  <>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                    <button onClick={() => setExpress(false)} style={tog(!express)}>Normal</button>
+                    <button onClick={() => setExpress(true)} style={tog(express)}>Express</button>
+                  </div>
+                  {modal.unit === "kg" ? (
+                    <>
+                      <div>
+                        <label style={posLbl}>Weight (kg)</label>
+                        <input type="number" value={weight} min={0} step="0.1"
+                          onChange={(e) => setWeight(e.target.value)} style={posField} placeholder="e.g. 1.5" />
+                      </div>
+                      <div>
+                        <label style={posLbl}>No. of clothes</label>
+                        <input type="number" value={qty} min={1} step={1}
+                          onChange={(e) => setQty(Math.max(1, Math.floor(+e.target.value || 1)))} style={posField} />
+                      </div>
+                    </>
+                  ) : (
                     <div>
-                      <label style={posLbl}>Weight (kg)</label>
-                      <input type="number" value={weight} min={0} step="0.1"
-                        onChange={(e) => setWeight(e.target.value)} style={posField} placeholder="e.g. 1.5" />
-                    </div>
-                    <div>
-                      <label style={posLbl}>No. of clothes</label>
+                      <label style={posLbl}>Quantity</label>
                       <input type="number" value={qty} min={1} step={1}
                         onChange={(e) => setQty(Math.max(1, Math.floor(+e.target.value || 1)))} style={posField} />
                     </div>
-                  </>
-                ) : (
-                  <div>
-                    <label style={posLbl}>Quantity</label>
-                    <input type="number" value={qty} min={1} step={1}
-                      onChange={(e) => setQty(Math.max(1, Math.floor(+e.target.value || 1)))} style={posField} />
-                  </div>
-                )}
-                {err && <div style={{ background: C.redLt, color: C.red, fontSize: 12, fontWeight: 600, padding: "8px 12px", borderRadius: 9 }}>{err}</div>}
-                <div className="flex items-center justify-between rounded-xl" style={{ background: C.tealLight, padding: "10px 14px", marginTop: 4 }}>
-                  <span style={{ fontSize: 12.5, color: C.tealDark, fontWeight: 700 }}>Est. price</span>
-                  <span style={{ fontWeight: 800, color: C.navy }}>
+                  )}
+                </div>
+              </div>
+
+              {/* Extra services on the SAME garment — one tag, combined price */}
+              <div style={{ marginTop: 18, borderTop: `1px dashed ${C.border}`, paddingTop: 14 }}>
+                <label style={posLbl}>Also do on this garment (optional)</label>
+                <p style={{ fontSize: 11, color: C.textFaint, margin: "2px 0 8px", lineHeight: 1.4 }}>
+                  Tick extra services — they're added to this one item's price and printed on its single tag.
+                </p>
+                <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr", maxHeight: 168, overflowY: "auto" }}>
+                  {outletProducts
+                    .filter((p) => p.id !== modal.id && (p.unit || "piece") !== "kg")
+                    .map((p) => {
+                      const on = addons.some((a) => a.id === p.id);
+                      return (
+                        <button key={p.id} type="button" onClick={() => toggleAddon(p)}
+                          className="flex items-center justify-between"
+                          style={{ textAlign: "left", padding: "9px 11px", borderRadius: 10, cursor: "pointer", fontSize: 12,
+                            border: on ? "none" : `1px solid ${C.border}`,
+                            background: on ? C.tealLight : "#fff", color: on ? C.tealDark : C.text, fontWeight: on ? 700 : 500 }}>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{on ? "✓ " : ""}{p.name}</span>
+                          <span style={{ fontWeight: 700, marginLeft: 6, flexShrink: 0 }}>+{inr(p.price)}</span>
+                        </button>
+                      );
+                    })}
+                </div>
+              </div>
+
+              {err && <div style={{ background: C.redLt, color: C.red, fontSize: 12, fontWeight: 600, padding: "8px 12px", borderRadius: 9, marginTop: 12 }}>{err}</div>}
+
+              <div className="rounded-xl" style={{ background: C.tealLight, padding: "12px 14px", marginTop: 14 }}>
+                <div className="flex items-center justify-between">
+                  <span style={{ fontSize: 12.5, color: C.tealDark, fontWeight: 700 }}>Est. line total</span>
+                  <span style={{ fontWeight: 800, color: C.navy, fontSize: 16 }}>
                     {(() => {
                       const base = Number(modal.price) || 0;
                       const m = express ? 1.6 : 1;
                       const w = Number(weight) || 0;
-                      const v = modal.unit === "kg" ? base * w * m : base * qty * m;
+                      const addonSum = addons.reduce((a, x) => a + Number(x.price || 0), 0);
+                      const v = modal.unit === "kg"
+                        ? base * w * m + addonSum * Math.max(1, qty) * m
+                        : (base + addonSum) * qty * m;
                       return inr(Math.round(v));
                     })()}
                   </span>
                 </div>
+                {addons.length > 0 && (
+                  <p style={{ fontSize: 11, color: C.tealDark, marginTop: 6 }}>
+                    {svc}{addons.map((a) => " + " + a.name).join("")}
+                  </p>
+                )}
                 {modal.unit === "kg" && (
-                  <p style={{ fontSize: 11, color: C.textFaint, lineHeight: 1.4 }}>Priced at {inr(modal.price)} / kg. Pieces are for the laundry tag.</p>
+                  <p style={{ fontSize: 11, color: C.textFaint, lineHeight: 1.4, marginTop: 6 }}>Priced at {inr(modal.price)} / kg. Pieces are for the laundry tag.</p>
                 )}
               </div>
             </div>
