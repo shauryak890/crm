@@ -64,6 +64,8 @@ export default function HQPanel({ profile, onExit }) {
   const [err, setErr] = useState("");
 
   const [selected, setSelected] = useState(null);   // outlet drill-down
+  const [view, setView] = useState("network");        // 'network' | 'customers'
+  const [expandedCust, setExpandedCust] = useState(null); // app-customer drill-down
   const [addOpen, setAddOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_OUTLET);
   const [saving, setSaving] = useState(false);
@@ -127,6 +129,34 @@ export default function HQPanel({ profile, onExit }) {
     name: b.outlet.name.replace(/^Patna\s*-\s*/i, ""),
     sales: Math.round(b.collected),
   }));
+
+  // ---- App customers (signed up in the app: profiles.role='customer') ----
+  // Each with their app orders (channel='app', matched by customer_user_id).
+  const appCustomers = useMemo(() => {
+    const appOrders = orders.filter((o) => o.channel === "app");
+    const ordersByUser = new Map();
+    appOrders.forEach((o) => {
+      const k = o.customer_user_id;
+      if (!k) return;
+      if (!ordersByUser.has(k)) ordersByUser.set(k, []);
+      ordersByUser.get(k).push(o);
+    });
+    return profiles
+      .filter((p) => p.role === "customer")
+      .map((p) => {
+        const ords = (ordersByUser.get(p.id) ?? []).sort(
+          (a, b) => new Date(b.created_at) - new Date(a.created_at)
+        );
+        return {
+          ...p,
+          orders: ords,
+          orderCount: ords.length,
+          totalSpent: ords.reduce((a, o) => a + Number(o.total || 0), 0),
+          lastOrderAt: ords[0]?.created_at ?? null,
+        };
+      })
+      .sort((a, b) => b.orderCount - a.orderCount || (a.name || "").localeCompare(b.name || ""));
+  }, [profiles, orders]);
 
   const saveOutlet = async () => {
     setFormErr("");
@@ -314,6 +344,90 @@ export default function HQPanel({ profile, onExit }) {
     );
   }
 
+  /* ---- App customers view ---- */
+  if (view === "customers") {
+    return (
+      <Shell profile={profile} onExit={onExit} logout={logout}>
+        <div className="flex items-end justify-between flex-wrap gap-3" style={{ marginBottom: 22 }}>
+          <div>
+            <p className="wb-eyebrow" style={{ color: "#9FB5C5" }}>Corporate · app customers</p>
+            <h1 style={{ fontSize: 32, fontWeight: 700, color: "#fff", letterSpacing: "-.02em", marginTop: 6 }}>App Customers</h1>
+            <p style={{ color: "#9FB5C5", fontSize: 13.5, marginTop: 6 }}>Everyone who signed up in the app, and their orders.</p>
+          </div>
+          <Btn variant="ghost" onClick={() => { setView("network"); setExpandedCust(null); }}>← Network</Btn>
+        </div>
+
+        {err && <div style={{ background: "rgba(224,72,77,.15)", color: "#FCA5A8", fontSize: 13, padding: "12px 16px", borderRadius: 12, marginBottom: 18 }}>{err}</div>}
+
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", marginBottom: 20 }}>
+          <Stat icon={UsersIcon} tone="navy" label="App customers" value={String(appCustomers.length)} />
+          <Stat icon={ShoppingBag} tone="teal" label="App orders" value={String(appCustomers.reduce((a, c) => a + c.orderCount, 0))} />
+          <Stat icon={Wallet} tone="green" label="App order value" value={inr(appCustomers.reduce((a, c) => a + c.totalSpent, 0))} />
+        </div>
+
+        <Card pad={false}>
+          <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}` }}>
+            <h3 style={{ fontWeight: 700, fontSize: 15, color: C.navy }}>Customers · {appCustomers.length}</h3>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+              <thead>
+                <tr style={{ background: C.bg }}>
+                  {["Customer", "Phone", "Orders", "Total value", "Last order", ""].map((h) => (
+                    <th key={h} style={{ textAlign: h === "Customer" || h === "Phone" || h === "" ? "left" : "right", padding: "11px 18px", fontSize: 11, fontWeight: 600, color: C.textMute, textTransform: "uppercase", letterSpacing: ".05em", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan={6} style={{ padding: "40px 0", textAlign: "center", color: C.textFaint }}>Loading…</td></tr>
+                ) : appCustomers.length === 0 ? (
+                  <tr><td colSpan={6} style={{ padding: "40px 0", textAlign: "center", color: C.textFaint }}>No app customers yet.</td></tr>
+                ) : appCustomers.map((c) => {
+                  const open = expandedCust === c.id;
+                  return (
+                    <React.Fragment key={c.id}>
+                      <tr
+                        onClick={() => setExpandedCust(open ? null : c.id)}
+                        style={{ cursor: "pointer" }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = C.bg)}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+                        <td style={tD}>
+                          <div className="flex items-center gap-3">
+                            <IconCircle icon={UsersIcon} tone="teal" size={34} />
+                            <span style={{ fontWeight: 600, fontSize: 13.5, color: C.navy }}>{c.name || "—"}</span>
+                          </div>
+                        </td>
+                        <td style={{ ...tD, color: C.textMute }}>{c.phone || c.email || "—"}</td>
+                        <td style={{ ...tD, textAlign: "right" }}>{c.orderCount}</td>
+                        <td style={{ ...tD, textAlign: "right", fontWeight: 700, color: C.navy }}>{inr(c.totalSpent)}</td>
+                        <td style={{ ...tD, textAlign: "right", color: C.textMute, fontSize: 12.5 }}>{c.lastOrderAt ? new Date(c.lastOrderAt).toLocaleDateString("en-GB") : "—"}</td>
+                        <td style={{ ...tD, textAlign: "right", color: C.teal, fontSize: 12.5 }}>{c.orderCount > 0 ? (open ? "Hide" : "View") : ""}</td>
+                      </tr>
+                      {open && c.orders.map((o) => (
+                        <tr key={o.id} style={{ background: C.bg }}>
+                          <td style={{ ...tD, paddingLeft: 64, fontSize: 12.5, color: C.navy }}>#{o.order_no} · {String(o.order_status || "").replace(/_/g, " ")}</td>
+                          <td style={{ ...tD, fontSize: 12.5, color: C.textMute }} colSpan={2}>{o.address || "—"}</td>
+                          <td style={{ ...tD, textAlign: "right", fontWeight: 600, color: C.navy, fontSize: 12.5 }}>{inr(o.total)}</td>
+                          <td style={{ ...tD, textAlign: "right", color: C.textMute, fontSize: 12 }} colSpan={2}>{new Date(o.created_at).toLocaleDateString("en-GB")}</td>
+                        </tr>
+                      ))}
+                      {open && c.orderCount === 0 && (
+                        <tr style={{ background: C.bg }}>
+                          <td colSpan={6} style={{ ...tD, paddingLeft: 64, color: C.textFaint, fontSize: 12.5 }}>No orders yet.</td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </Shell>
+    );
+  }
+
   /* ---- Network overview ---- */
   return (
     <Shell profile={profile} onExit={onExit} logout={logout}>
@@ -323,7 +437,10 @@ export default function HQPanel({ profile, onExit }) {
           <h1 style={{ fontSize: 32, fontWeight: 700, color: "#fff", letterSpacing: "-.02em", marginTop: 6 }}>Command Centre</h1>
           <p style={{ color: "#9FB5C5", fontSize: 13.5, marginTop: 6 }}>Every store's takings, orders and staff in one place.</p>
         </div>
-        <Btn variant="primary" icon={Plus} onClick={() => { setForm(EMPTY_OUTLET); setFormErr(""); setAddOpen(true); }}>New outlet</Btn>
+        <div className="flex items-center gap-3">
+          <Btn variant="ghost" icon={UsersIcon} onClick={() => setView("customers")}>App customers</Btn>
+          <Btn variant="primary" icon={Plus} onClick={() => { setForm(EMPTY_OUTLET); setFormErr(""); setAddOpen(true); }}>New outlet</Btn>
+        </div>
       </div>
 
       {err && <div style={{ background: "rgba(224,72,77,.15)", color: "#FCA5A8", fontSize: 13, padding: "12px 16px", borderRadius: 12, marginBottom: 18 }}>{err}</div>}
