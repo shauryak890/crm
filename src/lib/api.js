@@ -545,14 +545,35 @@ export async function fetchTasks() {
 // when they collect from the outlet). outlet_id is stamped by the column
 // DEFAULT (current_outlet_id()), so we don't send it.
 export async function assignDriver({ order_id, driver_id, type = "pickup" }) {
-  const { data: task, error } = await supabase
+  // Idempotent: if an OPEN task of this type already exists for this order,
+  // don't create a duplicate (prevents flooding the driver with repeated
+  // assignments + duplicate notifications when "Assign" is clicked twice).
+  const { data: existing } = await supabase
     .from("tasks")
-    .insert({ order_id, driver_id, type })
-    .select()
-    .single();
-  if (error) throw error;
-  // Best-effort status bump (pickup only) + driver flag; don't fail the
-  // assignment if these secondary updates hiccup.
+    .select("id, driver_id")
+    .eq("order_id", order_id)
+    .eq("type", type)
+    .not("status", "in", "(done,cancelled)")
+    .limit(1);
+
+  let task = existing?.[0] ?? null;
+  if (task) {
+    // Already assigned. Allow re-pointing it to a different driver, but
+    // never create a second row.
+    if (driver_id && task.driver_id !== driver_id) {
+      await supabase.from("tasks").update({ driver_id }).eq("id", task.id);
+    }
+  } else {
+    const { data: created, error } = await supabase
+      .from("tasks")
+      .insert({ order_id, driver_id, type })
+      .select()
+      .single();
+    if (error) throw error;
+    task = created;
+  }
+
+  // Best-effort status bump (pickup only) + driver flag.
   if (type === "pickup") {
     await supabase.from("orders").update({ order_status: "pickup_assigned" }).eq("id", order_id);
   }

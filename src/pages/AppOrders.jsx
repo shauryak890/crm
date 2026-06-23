@@ -39,20 +39,31 @@ function timeAgo(ts) {
 export default function AppOrders({ toast }) {
   const [orders, setOrders] = useState([]);
   const [drivers, setDrivers] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [assignFor, setAssignFor] = useState(null); // { order, type } being assigned
   const [live, setLive] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [o, d] = await Promise.all([api.fetchAppOrders(), api.fetchDrivers()]);
+      const [o, d, t] = await Promise.all([api.fetchAppOrders(), api.fetchDrivers(), api.fetchTasks()]);
       setOrders(o);
       setDrivers(d);
+      setTasks(t);
     } catch (e) {
       toast && toast("Load error: " + e.message);
     }
     setLoading(false);
   }, [toast]);
+
+  // Order ids that already have an OPEN task of each type → so we don't
+  // show "Assign" again (prevents duplicate assignments).
+  const openTaskTypes = (orderId) =>
+    new Set(
+      tasks
+        .filter((t) => t.order_id === orderId && t.status !== "done" && t.status !== "cancelled")
+        .map((t) => t.type)
+    );
 
   useEffect(() => { load(); }, [load]);
 
@@ -113,7 +124,7 @@ export default function AppOrders({ toast }) {
       ) : (
         <div className="flex flex-col gap-3">
           {orders.map((o) => (
-            <OrderRow key={o.id} o={o} onAssign={(type) => setAssignFor({ order: o, type })} onStatus={onStatus} />
+            <OrderRow key={o.id} o={o} assignedTypes={openTaskTypes(o.id)} onAssign={(type) => setAssignFor({ order: o, type })} onStatus={onStatus} />
           ))}
         </div>
       )}
@@ -152,9 +163,12 @@ function Stat({ label, value, tone, icon }) {
 // and the final delivered mark are the outlet's to advance.)
 const APP_STAGES = ["picked_up", "at_outlet", "washing", "ready", "out_for_delivery", "delivered"];
 
-function OrderRow({ o, onAssign, onStatus }) {
-  const pickupAssignable = o.order_status === "pending_pickup";
-  const deliveryAssignable = o.order_status === "ready";
+function OrderRow({ o, assignedTypes, onAssign, onStatus }) {
+  const has = assignedTypes ?? new Set();
+  // Only assignable if the right status AND no open task of that type yet
+  // (prevents re-assigning + flooding the driver with duplicates).
+  const pickupAssignable = o.order_status === "pending_pickup" && !has.has("pickup");
+  const deliveryAssignable = o.order_status === "ready" && !has.has("delivery");
   // Show a status dropdown once the bag is in the plant's hands.
   const showStatus = !pickupAssignable;
   const stageOptions = APP_STAGES.includes(o.order_status) ? APP_STAGES : [o.order_status, ...APP_STAGES];
@@ -191,6 +205,10 @@ function OrderRow({ o, onAssign, onStatus }) {
             ? <Btn small icon={UserPlus} onClick={() => onAssign("pickup")}>Assign pickup</Btn>
             : deliveryAssignable
             ? <Btn small icon={Bike} onClick={() => onAssign("delivery")}>Assign delivery</Btn>
+            : has.has("delivery")
+            ? <Badge tone="info">Delivery assigned</Badge>
+            : has.has("pickup") && o.order_status === "pending_pickup"
+            ? <Badge tone="info">Pickup assigned</Badge>
             : null}
         </div>
       </div>
