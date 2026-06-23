@@ -66,6 +66,11 @@ export default function Sales({
             <td style={td}><Badge tone="navy">{o.payment_method}</Badge></td>
             <td style={td}>
               {(() => {
+                // A customer-cancelled order is terminal — the CRM must not
+                // be able to revive it. Show a static badge, no dropdown.
+                if (o.order_status === "cancelled") {
+                  return <Badge tone="danger">Cancelled by customer</Badge>;
+                }
                 // App orders use the lowercase lifecycle vocabulary; walk-ins
                 // use the KANBAN labels. Pick the right option set per channel
                 // so an app order's status (e.g. "pending_pickup") is editable.

@@ -14,6 +14,7 @@ const STATE_LABEL = {
   ready: "Ready",
   out_for_delivery: "Out for delivery",
   delivered: "Delivered",
+  cancelled: "Cancelled",
 };
 const STATE_TONE = {
   pending_pickup: "warn",
@@ -24,6 +25,7 @@ const STATE_TONE = {
   ready: "info",
   out_for_delivery: "info",
   delivered: "success",
+  cancelled: "danger",
 };
 
 function timeAgo(ts) {
@@ -167,10 +169,14 @@ function OrderRow({ o, assignedTypes, onAssign, onStatus }) {
   const has = assignedTypes ?? new Set();
   // Only assignable if the right status AND no open task of that type yet
   // (prevents re-assigning + flooding the driver with duplicates).
+  // Terminal states the CRM must never reopen — a customer-cancelled order
+  // (or a delivered one) is final. No status control for these.
+  const terminal = o.order_status === "cancelled" || o.order_status === "delivered";
   const pickupAssignable = o.order_status === "pending_pickup" && !has.has("pickup");
   const deliveryAssignable = o.order_status === "ready" && !has.has("delivery");
-  // Show a status dropdown once the bag is in the plant's hands.
-  const showStatus = !pickupAssignable;
+  // Show a status dropdown once the bag is in the plant's hands (and the
+  // order isn't in a terminal state).
+  const showStatus = !pickupAssignable && !terminal;
   const stageOptions = APP_STAGES.includes(o.order_status) ? APP_STAGES : [o.order_status, ...APP_STAGES];
   return (
     <Card hover>
@@ -195,13 +201,18 @@ function OrderRow({ o, assignedTypes, onAssign, onStatus }) {
 
         <div className="flex items-center gap-3" style={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
           <span style={{ fontFamily: DISPLAY, fontWeight: 800, color: C.navy, fontSize: 16 }}>{inr(o.total)}</span>
+          {terminal && (
+            <Badge tone={o.order_status === "cancelled" ? "danger" : "success"}>
+              {o.order_status === "cancelled" ? "Cancelled by customer" : "Delivered"}
+            </Badge>
+          )}
           {showStatus && (
             <select value={o.order_status} onChange={(e) => onStatus(o.id, e.target.value)}
               style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 10px", fontSize: 12.5, fontWeight: 600, color: C.navy, background: "#fff" }}>
               {stageOptions.map((s) => <option key={s} value={s}>{STATE_LABEL[s] || s}</option>)}
             </select>
           )}
-          {pickupAssignable
+          {!terminal && (pickupAssignable
             ? <Btn small icon={UserPlus} onClick={() => onAssign("pickup")}>Assign pickup</Btn>
             : deliveryAssignable
             ? <Btn small icon={Bike} onClick={() => onAssign("delivery")}>Assign delivery</Btn>
@@ -209,7 +220,7 @@ function OrderRow({ o, assignedTypes, onAssign, onStatus }) {
             ? <Badge tone="info">Delivery assigned</Badge>
             : has.has("pickup") && o.order_status === "pending_pickup"
             ? <Badge tone="info">Pickup assigned</Badge>
-            : null}
+            : null)}
         </div>
       </div>
     </Card>

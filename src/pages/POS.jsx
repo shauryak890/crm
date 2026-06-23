@@ -70,6 +70,9 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
     setAddress(c.address || "");
     setPickerOpen(false);
     setPickerQuery("");
+    // Returning customer — clear any auto inaugural discount.
+    discTouched.current = false;
+    setDisc(0);
   };
 
   // Damage / notes — text note + staged image files (uploaded on Pay).
@@ -119,6 +122,25 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
     return customers.find((c) => normPhone(c.phone) === p) || null;
   }, [phone, customers]);
 
+  // Live suggestions while typing — partial phone (4+ digits) OR name
+  // (2+ letters). Helps the cashier catch a returning customer.
+  const [showSuggest, setShowSuggest] = useState(false);
+  const suggestions = useMemo(() => {
+    const pd = String(phone).replace(/\D/g, "");
+    const nm = name.trim().toLowerCase();
+    if (matched) return [];                         // already locked onto one
+    if (pd.length < 4 && nm.length < 2) return [];
+    return customers
+      .filter((c) => {
+        const cphone = normPhone(c.phone);
+        const cname = `${c.first_name} ${c.last_name || ""}`.toLowerCase();
+        const phoneHit = pd.length >= 4 && cphone.includes(pd.slice(-10));
+        const nameHit = nm.length >= 2 && cname.includes(nm);
+        return phoneHit || nameHit;
+      })
+      .slice(0, 6);
+  }, [phone, name, customers, matched]);
+
   // Auto-fill name + address from a matched customer (but only when
   // they're still blank — never trample what the cashier just typed).
   useEffect(() => {
@@ -127,6 +149,33 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
     if (!name.trim()) setName(full);
     if (!address.trim() && matched.address) setAddress(matched.address);
   }, [matched]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A "new" customer = enough identity entered to bill, but no existing
+  // match. First-time customers get the inaugural 25% and are capped there.
+  const NEW_CUST_MAX_DISC = 25;
+  const isNewCustomer = !matched && (normPhone(phone).length >= 10 || name.trim().length >= 2);
+
+  // Apply the inaugural 25% automatically the moment they qualify as new —
+  // unless the cashier has manually overridden the discount. Reset the
+  // "touched" flag whenever we lock onto an existing customer.
+  const discTouched = useRef(false);
+  useEffect(() => {
+    if (matched) { discTouched.current = false; return; }
+    if (isNewCustomer && !discTouched.current) {
+      setDisc((d) => (d === NEW_CUST_MAX_DISC ? d : NEW_CUST_MAX_DISC));
+    }
+  }, [isNewCustomer, matched]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Pick a suggested existing customer.
+  const pickSuggestion = (c) => {
+    const full = `${c.first_name} ${c.last_name || ""}`.trim();
+    setName(full);
+    setPhone(c.phone || "");
+    if (c.address) setAddress(c.address);
+    setShowSuggest(false);
+    discTouched.current = false;
+    setDisc(0);                                     // returning customer: no auto-offer
+  };
 
   // A super-admin sees ALL outlets' products (RLS bypass). Once they've
   // picked a billing outlet, the grid must show ONLY that outlet's
@@ -224,7 +273,9 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
   };
 
   const sub = cart.reduce((a, i) => a + i.line_total, 0);
-  const total = Math.max(0, Math.round(sub - (sub * disc) / 100 + (sub * tax) / 100));
+  // Enforce the new-customer cap in the maths too, as a safety net.
+  const effectiveDisc = isNewCustomer ? Math.min(disc, NEW_CUST_MAX_DISC) : disc;
+  const total = Math.max(0, Math.round(sub - (sub * effectiveDisc) / 100 + (sub * tax) / 100));
 
   // ---- Daily processing capacity -----------------------------------
   // Garment count this cart adds (qty is the piece count on both piece-
@@ -308,7 +359,7 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
         fulfilment,
         due_date: dueDate,
         subtotal: sub,
-        discount_pct: disc,
+        discount_pct: effectiveDisc,
         tax_pct: tax,
         total,
         pieces: cartPieces,
@@ -329,6 +380,7 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
       if (ok) {
         setCart([]); setDisc(0); setTax(0); setAmountReceived("");
         setName(""); setPhone(""); setAddress("");
+        discTouched.current = false; setShowSuggest(false);
         setFulfilment("pickup"); setDueDate(todayPlus(2));
         photos.forEach((p) => URL.revokeObjectURL(p.preview));
         setPhotos([]); setDamageNote("");
@@ -439,15 +491,49 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
                 <UserCheck size={14} /> Existing client · {matched.code}
               </div>
             )}
-            <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            {!matched && isNewCustomer && (
+              <div className="flex items-center gap-2 rounded-xl" style={{ background: C.greenLt, color: C.green, padding: "8px 12px", fontSize: 12, fontWeight: 700 }}>
+                ✦ New customer · 25% inaugural offer applied (max 25%)
+              </div>
+            )}
+            <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr", position: "relative" }}>
               <div>
                 <label style={posLbl}>Name *</label>
-                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Customer name" style={posField} />
+                <input value={name}
+                  onChange={(e) => { setName(e.target.value); setShowSuggest(true); }}
+                  onFocus={() => setShowSuggest(true)}
+                  onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
+                  placeholder="Customer name" style={posField} />
               </div>
               <div>
                 <label style={posLbl}>Phone *</label>
-                <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="10-digit number" style={posField} inputMode="tel" />
+                <input value={phone}
+                  onChange={(e) => { setPhone(e.target.value); setShowSuggest(true); }}
+                  onFocus={() => setShowSuggest(true)}
+                  onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
+                  placeholder="10-digit number" style={posField} inputMode="tel" />
               </div>
+
+              {/* Live "similar customer" suggestions */}
+              {showSuggest && suggestions.length > 0 && (
+                <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 30, marginTop: 4,
+                  background: "#fff", border: `1px solid ${C.border}`, borderRadius: 12, boxShadow: "0 18px 40px -18px rgba(15,42,59,.3)", overflow: "hidden" }}>
+                  <div style={{ padding: "7px 12px", fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.textFaint, background: C.bg }}>
+                    Similar customers — tap to use
+                  </div>
+                  {suggestions.map((c) => (
+                    <button key={c.id} type="button" onClick={() => pickSuggestion(c)}
+                      className="flex items-center justify-between w-full"
+                      style={{ padding: "9px 12px", border: "none", borderTop: `1px solid ${C.borderSoft}`, background: "#fff", cursor: "pointer", textAlign: "left" }}>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: C.navy }}>{c.first_name} {c.last_name}</span>
+                        <span style={{ fontSize: 11.5, color: C.textFaint, marginLeft: 8 }}>{c.phone}</span>
+                      </span>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: C.tealDark, background: C.tealLight, padding: "2px 7px", borderRadius: 99, flexShrink: 0 }}>{c.code}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr" }}>
               <div>
@@ -569,7 +655,19 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
               <div className="flex items-center gap-3">
                 <span className="flex items-center gap-1.5">
                   <span style={{ fontSize: 12, color: C.textMute }}>Disc</span>
-                  <input type="number" value={disc} onChange={(e) => setDisc(+e.target.value || 0)} style={{ ...miniField, width: 48, padding: "5px 7px" }} />
+                  <input type="number" value={disc} min={0} max={isNewCustomer ? NEW_CUST_MAX_DISC : 100}
+                    title={isNewCustomer ? "New customers: max 25%" : undefined}
+                    onChange={(e) => {
+                      discTouched.current = true;
+                      let v = +e.target.value || 0;
+                      if (v < 0) v = 0;
+                      // Hard cap for first-time customers.
+                      if (isNewCustomer && v > NEW_CUST_MAX_DISC) v = NEW_CUST_MAX_DISC;
+                      if (v > 100) v = 100;
+                      setDisc(v);
+                    }}
+                    style={{ ...miniField, width: 48, padding: "5px 7px",
+                      borderColor: isNewCustomer && disc >= NEW_CUST_MAX_DISC ? C.teal : C.border }} />
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span style={{ fontSize: 12, color: C.textMute }}>Tax</span>
