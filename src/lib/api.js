@@ -73,6 +73,22 @@ export function rollupCustomer(cust, orders) {
 /* ------------------------------------------------------------------ */
 /*  Mutations                                                          */
 /* ------------------------------------------------------------------ */
+// The ONLY columns that exist on order_items. Any other key (UI flags
+// like `key`, `original`, `addons`, the row `id`, `created_at`, …) must
+// be dropped before insert/update or PostgREST rejects the whole batch
+// with "Could not find the 'X' column in the schema cache".
+const ORDER_ITEM_COLS = [
+  "product_name", "service_type", "express", "qty",
+  "weight_kg", "unit", "unit_price", "line_total",
+];
+function sanitizeOrderItem(it, orderId) {
+  const row = { order_id: orderId };
+  for (const c of ORDER_ITEM_COLS) {
+    if (it[c] !== undefined) row[c] = it[c];
+  }
+  return row;
+}
+
 export async function createOrder({ order, items }) {
   const { data: created, error } = await supabase
     .from("orders")
@@ -82,14 +98,7 @@ export async function createOrder({ order, items }) {
   if (error) throw error;
 
   if (items?.length) {
-    // Strip undefined fields so installs without the latest migration
-    // (i.e. without `unit` / `weight_kg`) don't get tripped by the
-    // PostgREST schema cache. Keys present but null/0 are kept.
-    const rows = items.map((i) => {
-      const row = { ...i, order_id: created.id };
-      Object.keys(row).forEach((k) => row[k] === undefined && delete row[k]);
-      return row;
-    });
+    const rows = items.map((i) => sanitizeOrderItem(i, created.id));
     const { error: e2 } = await supabase.from("order_items").insert(rows);
     if (e2) {
       // Roll back the order so we don't leave an orphan visible in Sales.
@@ -176,20 +185,34 @@ export async function updateOrderFull({ id, before, fields, items, editor }) {
   const { error } = await supabase.from("orders").update(stamped).eq("id", id);
   if (error) throw error;
 
-  // Replace line items if a new set was supplied.
+  // Reconcile line items if a new set was supplied. We UPDATE existing
+  // rows in place and INSERT only genuinely new ones — no delete-then-
+  // insert, so a failure can never wipe an order down to zero items.
   if (Array.isArray(items)) {
-    const { error: delErr } = await supabase.from("order_items").delete().eq("order_id", id);
+    const existing = items.filter((i) => i.id);          // had a real DB id
+    const fresh = items.filter((i) => !i.id);            // added this edit
+    const keepIds = existing.map((i) => i.id);
+
+    // 1) Delete any original rows the editor removed (kept set excludes them).
+    let del = supabase.from("order_items").delete().eq("order_id", id);
+    if (keepIds.length) del = del.not("id", "in", `(${keepIds.join(",")})`);
+    const { error: delErr } = await del;
     if (delErr) throw delErr;
-    if (items.length) {
-      const rows = items.map((i) => {
-        const { key, id: _omit, ...rest } = i;
-        const row = { ...rest, order_id: id };
-        Object.keys(row).forEach((k) => row[k] === undefined && delete row[k]);
-        return row;
-      });
+
+    // 2) Update each surviving original row (qty / price may have changed).
+    for (const it of existing) {
+      const row = sanitizeOrderItem(it, id);
+      const { error: upErr } = await supabase.from("order_items").update(row).eq("id", it.id);
+      if (upErr) throw upErr;
+    }
+
+    // 3) Insert the brand-new rows.
+    if (fresh.length) {
+      const rows = fresh.map((i) => sanitizeOrderItem(i, id));
       const { error: insErr } = await supabase.from("order_items").insert(rows);
       if (insErr) throw insErr;
     }
+
     changes.push({ field: "items", from: "(previous)", to: `${items.length} item(s)` });
   }
 
