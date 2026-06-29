@@ -12,6 +12,8 @@ import { supabase } from "../../lib/supabase";
 import * as api from "../../lib/api";
 import { Logo, Card, Btn, Badge, IconCircle, Modal, field, fieldLabel } from "../../components/ui";
 import { isToday } from "../../lib/aggregate";
+import HQOffers from "./HQOffers";
+import { Tag } from "lucide-react";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const PIE = [C.teal, C.navy, C.tealMid, C.amber, C.green, "#8FA6B4"];
@@ -70,6 +72,13 @@ export default function HQPanel({ profile, onExit }) {
   const [form, setForm] = useState(EMPTY_OUTLET);
   const [saving, setSaving] = useState(false);
   const [formErr, setFormErr] = useState("");
+  const [toastMsg, setToastMsg] = useState("");
+
+  const toast = (msg) => {
+    setToastMsg(msg);
+    window.clearTimeout(toast._t);
+    toast._t = window.setTimeout(() => setToastMsg(""), 2600);
+  };
 
   const load = async () => {
     setLoading(true);
@@ -428,9 +437,22 @@ export default function HQPanel({ profile, onExit }) {
     );
   }
 
+  /* ---- Offers & banners view ---- */
+  if (view === "offers") {
+    return (
+      <Shell profile={profile} onExit={onExit} logout={logout} toast={toastMsg}
+        crumb={<button onClick={() => setView("network")} className="wb-press inline-flex items-center gap-1"
+          style={{ background: "transparent", border: "none", color: C.tealMid, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          <ArrowLeft size={14} /> Network
+        </button>}>
+        <HQOffers toast={toast} />
+      </Shell>
+    );
+  }
+
   /* ---- Network overview ---- */
   return (
-    <Shell profile={profile} onExit={onExit} logout={logout}>
+    <Shell profile={profile} onExit={onExit} logout={logout} toast={toastMsg}>
       <div className="flex items-end justify-between flex-wrap gap-3" style={{ marginBottom: 26 }}>
         <div>
           <p className="wb-eyebrow" style={{ color: "#9FB5C5" }}>Corporate · all outlets</p>
@@ -439,6 +461,7 @@ export default function HQPanel({ profile, onExit }) {
         </div>
         <div className="flex items-center gap-3">
           <Btn variant="ghost" icon={UsersIcon} onClick={() => setView("customers")}>App customers</Btn>
+          <Btn variant="ghost" icon={Tag} onClick={() => setView("offers")}>Offers</Btn>
           <Btn variant="primary" icon={Plus} onClick={() => { setForm(EMPTY_OUTLET); setFormErr(""); setAddOpen(true); }}>New outlet</Btn>
         </div>
       </div>
@@ -550,9 +573,16 @@ export default function HQPanel({ profile, onExit }) {
 }
 
 /* Full-screen navy shell — no app sidebar. */
-function Shell({ profile, onExit, logout, crumb, children }) {
+function Shell({ profile, onExit, logout, crumb, children, toast }) {
   return (
     <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${C.navy} 0%, ${C.navyDeep} 100%)`, color: "#fff" }}>
+      {toast && (
+        <div style={{ position: "fixed", top: 18, left: "50%", transform: "translateX(-50%)", zIndex: 9999,
+          background: C.navy, color: "#fff", border: "1px solid rgba(255,255,255,.18)",
+          padding: "10px 18px", borderRadius: 12, fontSize: 13.5, fontWeight: 600, boxShadow: "0 10px 30px rgba(0,0,0,.35)" }}>
+          {toast}
+        </div>
+      )}
       <header className="flex items-center justify-between" style={{ padding: "18px 28px", borderBottom: "1px solid rgba(255,255,255,.08)" }}>
         <div className="flex items-center gap-3">
           <div className="flex items-center justify-center rounded-xl" style={{ background: "rgba(255,255,255,.08)", width: 40, height: 40 }}>

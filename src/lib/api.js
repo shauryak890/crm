@@ -585,3 +585,59 @@ export async function updateTaskStatus(id, status) {
   const { error } = await supabase.from("tasks").update({ status }).eq("id", id);
   if (error) throw error;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Offers / promo banners (HQ-managed, global — super_admin only)      */
+/* ------------------------------------------------------------------ */
+
+// Upload a banner image to the public offer-banners bucket, return its URL.
+export async function uploadOfferBanner(file) {
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const { error } = await supabase.storage
+    .from("offer-banners")
+    .upload(path, file, { contentType: file.type || "image/jpeg" });
+  if (error) throw error;
+  const { data } = supabase.storage.from("offer-banners").getPublicUrl(path);
+  return data.publicUrl;
+}
+
+export async function fetchOffers() {
+  const { data, error } = await supabase
+    .from("offers")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+// Create an offer. Expects all fields (the HQ form makes them mandatory):
+// { image_url, description, coupon_code, discount_type, discount_value,
+//   max_discount, min_order, is_active }
+export async function createOffer(offer) {
+  const { data, error } = await supabase
+    .from("offers")
+    .insert({ ...offer, coupon_code: String(offer.coupon_code || "").trim().toUpperCase() })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateOffer(id, patch) {
+  const next = { ...patch };
+  if (next.coupon_code != null) next.coupon_code = String(next.coupon_code).trim().toUpperCase();
+  const { data, error } = await supabase
+    .from("offers")
+    .update(next)
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteOffer(id) {
+  const { error } = await supabase.from("offers").delete().eq("id", id);
+  if (error) throw error;
+}

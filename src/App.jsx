@@ -390,7 +390,7 @@ export default function App() {
             isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} />}
           {view === "sales" && <Sales orders={orders} loading={loading} products={products} isAdmin={isAdmin}
             onStatus={onStatus} onTogglePaid={onTogglePaid} onOpenInvoice={setInvoiceOrder}
-            onEditOrder={onEditOrder} onDeleteOrder={onDeleteOrder} onQuickAddProduct={onQuickAddProduct}
+            onEditOrder={onEditOrder} onQuickAddProduct={onQuickAddProduct}
             onChangeDeliveryDate={onChangeDeliveryDate} onMarkDelayNotified={onMarkDelayNotified} />}
           {view === "orderstatus" && <OrderStatus orders={orders} onStatus={onStatus} />}
           {view === "delivery" && <Delivery orders={orders} />}

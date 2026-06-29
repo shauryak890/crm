@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Printer, FileText, Pencil, Trash2, CalendarClock, History, X, MessageCircle } from "lucide-react";
+import { Printer, FileText, Pencil, CalendarClock, History, X, MessageCircle } from "lucide-react";
 import { C, KANBAN, APP_LIFECYCLE, APP_LIFECYCLE_LABEL, PAYMENT_METHODS, DELAY_REASONS, STORE, inr, balanceDue } from "../theme";
 import { PageHead, Btn, Badge, DataTable, Modal, td, iconBtn, field, fieldLabel } from "../components/ui";
 import * as api from "../lib/api";
@@ -10,7 +10,7 @@ const fmtDateTime = (s) => s ? new Date(s).toLocaleString("en-GB", { day: "2-dig
 export default function Sales({
   orders, loading, products = [], isAdmin,
   onStatus, onTogglePaid, onOpenInvoice,
-  onEditOrder, onDeleteOrder, onChangeDeliveryDate, onMarkDelayNotified, onQuickAddProduct,
+  onEditOrder, onChangeDeliveryDate, onMarkDelayNotified, onQuickAddProduct,
 }) {
   const [editOrder, setEditOrder] = useState(null);     // full edit
   const [dateOrder, setDateOrder] = useState(null);     // delivery-date change
@@ -92,13 +92,9 @@ export default function Sales({
               <div className="inline-flex items-center gap-1">
                 <button onClick={() => onOpenInvoice && onOpenInvoice(o)} title="Invoice / Tags"
                   style={iconBtn(C.tealLight, C.tealDark)}><FileText size={14} /></button>
-                {isAdmin && (
-                  <>
-                    <button onClick={() => setEditOrder(o)} title="Edit sale (admin)"
-                      style={iconBtn(C.bg, C.navy)}><Pencil size={14} /></button>
-                    <button onClick={() => onDeleteOrder(o)} title="Delete sale (admin)"
-                      style={iconBtn(C.redLt, C.red)}><Trash2 size={14} /></button>
-                  </>
+                {isAdmin && o.order_status !== "cancelled" && (
+                  <button onClick={() => setEditOrder(o)} title="Edit sale — add items only (admin)"
+                    style={iconBtn(C.bg, C.navy)}><Pencil size={14} /></button>
                 )}
               </div>
             </td>
@@ -144,13 +140,22 @@ function EditSaleModal({ order, products, onClose, onSave, onQuickAddProduct }) 
     amount_paid: order.amount_paid || 0,
   });
   const [items, setItems] = useState(null); // null until loaded
+  // Baseline of the original items keyed by id → so we can enforce
+  // "add-only": existing lines can't be removed and their qty/weight can
+  // only increase. New lines added in this session are freely editable.
+  const [baseline, setBaseline] = useState({}); // { key: { qty, weight_kg } }
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   useEffect(() => {
     let alive = true;
     api.fetchOrderItemsForOrder(order.id).then((rows) => {
-      if (alive) setItems(rows.map((r, i) => ({ ...r, key: r.id || i })));
+      if (!alive) return;
+      const mapped = rows.map((r, i) => ({ ...r, key: r.id || i, original: true }));
+      setItems(mapped);
+      const base = {};
+      mapped.forEach((r) => { base[r.key] = { qty: Number(r.qty) || 0, weight_kg: Number(r.weight_kg) || 0 }; });
+      setBaseline(base);
     }).catch(() => alive && setItems([]));
     return () => { alive = false; };
   }, [order.id]);
@@ -161,6 +166,13 @@ function EditSaleModal({ order, products, onClose, onSave, onQuickAddProduct }) 
   const setItem = (key, patch) => setItems((cur) => cur.map((i) => {
     if (i.key !== key) return i;
     const next = { ...i, ...patch };
+    // Enforce add-only: an original line's qty/weight can't drop below the
+    // baseline it was opened with.
+    const b = baseline[key];
+    if (b) {
+      if (next.qty != null && Number(next.qty) < b.qty) next.qty = b.qty;
+      if (next.weight_kg != null && Number(next.weight_kg) < b.weight_kg) next.weight_kg = b.weight_kg;
+    }
     // Recompute the line total from qty/weight × unit price.
     const up = Number(next.unit_price) || 0;
     next.line_total = next.unit === "kg"
@@ -168,7 +180,8 @@ function EditSaleModal({ order, products, onClose, onSave, onQuickAddProduct }) 
       : Math.round(up * (Number(next.qty) || 1));
     return next;
   }));
-  const removeItem = (key) => setItems((cur) => cur.filter((i) => i.key !== key));
+  // Only NEW lines (added this session) may be removed; originals are locked.
+  const removeItem = (key) => setItems((cur) => cur.filter((i) => i.key !== key || i.original));
   const addItem = (p) => {
     if (!p) return;
     setItems((cur) => [...cur, {
@@ -184,6 +197,13 @@ function EditSaleModal({ order, products, onClose, onSave, onQuickAddProduct }) 
     setErr("");
     if (!form.customer_name.trim()) { setErr("Customer name is required."); return; }
     if (!items || items.length === 0) { setErr("An order needs at least one item."); return; }
+    // Add-only rule: the edited total can never be LESS than the original.
+    // (You can add items / raise qty / reduce discount — never shrink it.)
+    const origTotal = Number(order.total) || 0;
+    if (total < origTotal) {
+      setErr(`Edits can only increase the order. Total can't go below the original ${inr(origTotal)}.`);
+      return;
+    }
     setBusy(true);
     const fields = {
       ...form,
@@ -196,7 +216,7 @@ function EditSaleModal({ order, products, onClose, onSave, onQuickAddProduct }) 
   };
 
   return (
-    <Modal title={`Edit Order #${order.order_no}`} sub="Admin edit — every change is logged" onClose={onClose} width={620}>
+    <Modal title={`Edit Order #${order.order_no}`} sub="Add-only — you can add items or increase quantities, not reduce them. Every change is logged." onClose={onClose} width={620}>
       <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <div><label style={fieldLabel}>Customer *</label><input style={field} value={form.customer_name} onChange={(e) => setForm({ ...form, customer_name: e.target.value })} /></div>
         <div><label style={fieldLabel}>Phone</label><input style={field} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
@@ -224,23 +244,30 @@ function EditSaleModal({ order, products, onClose, onSave, onQuickAddProduct }) 
             <div style={{ padding: 20, textAlign: "center", color: C.textFaint, fontSize: 13 }}>Loading items…</div>
           ) : items.length === 0 ? (
             <div style={{ padding: 20, textAlign: "center", color: C.textFaint, fontSize: 13 }}>No items. Add one below.</div>
-          ) : items.map((i) => (
+          ) : items.map((i) => {
+            const b = baseline[i.key];
+            const minQty = b ? Math.max(1, b.qty) : 1;
+            const minWt = b ? b.weight_kg : 0;
+            return (
             <div key={i.key} className="flex items-center gap-2" style={{ padding: "10px 14px", borderTop: `1px solid ${C.borderSoft}` }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <p style={{ fontSize: 13, fontWeight: 600, color: C.navy, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{i.product_name}</p>
-                <p style={{ fontSize: 11, color: C.textFaint }}>{inr(i.unit_price)}{i.unit === "kg" ? "/kg" : " ea"}</p>
+                <p style={{ fontSize: 11, color: C.textFaint }}>{inr(i.unit_price)}{i.unit === "kg" ? "/kg" : " ea"}{i.original ? " · existing" : ""}</p>
               </div>
               {i.unit === "kg" ? (
-                <input type="number" step="0.1" min="0" value={i.weight_kg ?? ""} onChange={(e) => setItem(i.key, { weight_kg: e.target.value })}
-                  style={{ ...field, width: 70, padding: "6px 8px" }} title="kg" />
+                <input type="number" step="0.1" min={minWt} value={i.weight_kg ?? ""} onChange={(e) => setItem(i.key, { weight_kg: e.target.value })}
+                  style={{ ...field, width: 70, padding: "6px 8px" }} title={i.original ? `Can only increase (was ${minWt} kg)` : "kg"} />
               ) : (
-                <input type="number" step="1" min="1" value={i.qty} onChange={(e) => setItem(i.key, { qty: Math.max(1, +e.target.value || 1) })}
-                  style={{ ...field, width: 60, padding: "6px 8px" }} title="qty" />
+                <input type="number" step="1" min={minQty} value={i.qty} onChange={(e) => setItem(i.key, { qty: Math.max(minQty, +e.target.value || minQty) })}
+                  style={{ ...field, width: 60, padding: "6px 8px" }} title={i.original ? `Can only increase (was ${minQty})` : "qty"} />
               )}
               <span style={{ width: 70, textAlign: "right", fontWeight: 700, fontSize: 13, color: C.navy }}>{inr(i.line_total)}</span>
-              <button onClick={() => removeItem(i.key)} style={iconBtn(C.redLt, C.red)}><X size={13} /></button>
+              {i.original
+                ? <span style={{ width: 36, textAlign: "center", color: C.textFaint, fontSize: 16 }} title="Existing item — can't be removed">🔒</span>
+                : <button onClick={() => removeItem(i.key)} style={iconBtn(C.redLt, C.red)} title="Remove (newly added)"><X size={13} /></button>}
             </div>
-          ))}
+            );
+          })}
         </div>
         <div className="flex items-center gap-2" style={{ padding: "10px 14px", borderTop: `1px solid ${C.borderSoft}`, background: C.bg }}>
           <select value="" onChange={(e) => {
@@ -258,7 +285,17 @@ function EditSaleModal({ order, products, onClose, onSave, onQuickAddProduct }) 
 
       {/* Totals */}
       <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr 1fr", marginTop: 14, alignItems: "end" }}>
-        <div><label style={fieldLabel}>Discount %</label><input style={field} type="number" min="0" value={form.discount_pct} onChange={(e) => setForm({ ...form, discount_pct: +e.target.value || 0 })} /></div>
+        <div><label style={fieldLabel}>Discount %</label>
+          <input style={field} type="number" min="0" max={order.discount_pct || 0} value={form.discount_pct}
+            title={`Can't raise discount above the original ${order.discount_pct || 0}%`}
+            onChange={(e) => {
+              // Discount can only be reduced (never increased), so the order
+              // value can't be lowered via a bigger discount.
+              let v = +e.target.value || 0;
+              if (v < 0) v = 0;
+              if (v > (Number(order.discount_pct) || 0)) v = Number(order.discount_pct) || 0;
+              setForm({ ...form, discount_pct: v });
+            }} /></div>
         <div><label style={fieldLabel}>Tax %</label><input style={field} type="number" min="0" value={form.tax_pct} onChange={(e) => setForm({ ...form, tax_pct: +e.target.value || 0 })} /></div>
         <div style={{ textAlign: "right" }}>
           <p style={{ fontSize: 11.5, color: C.textMute }}>New total</p>
