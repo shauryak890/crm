@@ -122,6 +122,31 @@ export async function updateOrderFields(id, fields) {
   if (error) throw error;
 }
 
+// All line items for ONE order, with the fields the weigh-in modal needs.
+export async function fetchItemsForOrder(orderId) {
+  const { data, error } = await supabase
+    .from("order_items")
+    .select("id, product_name, unit, express, qty, weight_kg, est_weight_kg, unit_price, line_total")
+    .eq("order_id", orderId)
+    .order("id");
+  if (error) throw error;
+  return data;
+}
+
+// Weigh-in at the outlet: submit actual kg for each kg item. The RPC
+// recomputes each line + the order subtotal/total (re-applying any coin/
+// coupon discount), stamps weighed_at, and notifies the customer.
+// items = [{ id, weight_kg }]
+export async function applyActualWeights(orderId, items) {
+  const { data, error } = await supabase.rpc("apply_actual_weights", {
+    p_order_id: orderId,
+    p_items: items,
+  });
+  if (error) throw error;
+  if (data && data.success === false) throw new Error(data.error || "Could not save weights");
+  return data;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Order editing + audit                                              */
 /* ------------------------------------------------------------------ */
@@ -432,6 +457,76 @@ export async function createOutlet({ code, name, address, phone }) {
 
 export async function updateOutlet(id, fields) {
   const { error } = await supabase.from("outlets").update(fields).eq("id", id);
+  if (error) throw error;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Supply / stock ordering (outlet → HQ)                              */
+/* ------------------------------------------------------------------ */
+
+// The global master supply catalogue (chemicals + packaging).
+export async function fetchSupplyItems() {
+  const { data, error } = await supabase
+    .from("supply_items")
+    .select("*")
+    .eq("active", true)
+    .order("sort", { ascending: true })
+    .order("name", { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
+// Supply orders. RLS scopes: outlet sees its own, super_admin sees all.
+export async function fetchSupplyOrders() {
+  const { data, error } = await supabase
+    .from("supply_orders")
+    .select("*, outlet:outlets(name, code)")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function fetchSupplyOrderItems(orderId) {
+  const { data, error } = await supabase
+    .from("supply_order_items")
+    .select("*")
+    .eq("supply_order_id", orderId);
+  if (error) throw error;
+  return data;
+}
+
+// Raise a new supply order for the caller's outlet. `outletId` is only
+// needed for a super_admin (who has no home outlet).
+export async function createSupplyOrder({ items, note, requester, outletId }) {
+  const total = items.reduce((a, i) => a + Number(i.line_total || 0), 0);
+  const order = { requester: requester || null, note: note || null, total };
+  if (outletId) order.outlet_id = outletId;   // super_admin path
+  const { data: created, error } = await supabase
+    .from("supply_orders").insert(order).select().single();
+  if (error) throw error;
+
+  const rows = items.map((i) => ({
+    supply_order_id: created.id,
+    item_name: i.item_name,
+    category: i.category || null,
+    unit: i.unit || null,
+    qty: Number(i.qty) || 0,
+    unit_price: Number(i.unit_price) || 0,
+    line_total: Number(i.line_total) || 0,
+  }));
+  const { error: e2 } = await supabase.from("supply_order_items").insert(rows);
+  if (e2) {
+    await supabase.from("supply_orders").delete().eq("id", created.id);
+    throw e2;
+  }
+  return created;
+}
+
+// HQ moves the order through the workflow (or an outlet cancels its own).
+export async function updateSupplyOrderStatus(id, status, hq_note) {
+  const patch = { status };
+  if (hq_note !== undefined) patch.hq_note = hq_note;
+  const { error } = await supabase.from("supply_orders").update(patch).eq("id", id);
   if (error) throw error;
 }
 

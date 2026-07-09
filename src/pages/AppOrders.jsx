@@ -44,6 +44,7 @@ export default function AppOrders({ toast }) {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [assignFor, setAssignFor] = useState(null); // { order, type } being assigned
+  const [weighFor, setWeighFor] = useState(null);   // order being weighed at outlet
   const [live, setLive] = useState(false);
 
   const load = useCallback(async () => {
@@ -82,10 +83,21 @@ export default function AppOrders({ toast }) {
   // Advance an app order through its lifecycle from the CRM. Optimistic
   // update, then persist; the realtime subscription keeps the apps in sync.
   const onStatus = useCallback(async (id, status) => {
+    // Marking an order "At outlet" requires weighing it first: open the
+    // weigh-in modal instead of setting the status directly. Once staff
+    // submit the actual weights, the modal advances the status to at_outlet.
+    // (Skip the gate if it's somehow already weighed.)
+    if (status === "at_outlet") {
+      const order = orders.find((o) => o.id === id);
+      if (order && !order.weighed_at) {
+        setWeighFor(order);
+        return;
+      }
+    }
     setOrders((p) => p.map((o) => (o.id === id ? { ...o, order_status: status } : o)));
     try { await api.updateOrderStatus(id, status); }
     catch (e) { toast && toast("Update failed: " + e.message); load(); }
-  }, [toast, load]);
+  }, [toast, load, orders]);
 
   const pending = orders.filter((o) => o.order_status === "pending_pickup");
   const active = orders.filter((o) => o.order_status !== "pending_pickup" && o.order_status !== "delivered");
@@ -142,7 +154,162 @@ export default function AppOrders({ toast }) {
           toast={toast}
         />
       )}
+
+      {weighFor && (
+        <WeighModal
+          order={weighFor}
+          onClose={() => setWeighFor(null)}
+          onWeighed={async () => { setWeighFor(null); await load(); }}
+          toast={toast}
+        />
+      )}
     </div>
+  );
+}
+
+// Weigh-in at the outlet. Lists the order's kg items with an actual-weight
+// input each (piece items shown read-only). On save: submit the actual
+// weights (recomputes prices server-side) AND advance the order to
+// "At outlet". This is the required step before an order can be processed.
+function WeighModal({ order, onClose, onWeighed, toast }) {
+  const [items, setItems] = useState([]);
+  const [weights, setWeights] = useState({}); // itemId → string
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    api.fetchItemsForOrder(order.id)
+      .then((rows) => {
+        setItems(rows);
+        const init = {};
+        rows.forEach((it) => {
+          if (it.unit === "kg") {
+            // Pre-fill with the customer's estimate for convenience.
+            init[it.id] = it.weight_kg != null ? String(it.weight_kg) : "";
+          }
+        });
+        setWeights(init);
+      })
+      .catch((e) => setErr(e.message || "Could not load items."))
+      .finally(() => setLoading(false));
+  }, [order.id]);
+
+  const kgItems = items.filter((it) => it.unit === "kg");
+  const pieceItems = items.filter((it) => it.unit !== "kg");
+
+  const preview = kgItems.reduce((sum, it) => {
+    const w = Number(weights[it.id]);
+    const mult = it.express ? 1.6 : 1;
+    const line = Number.isFinite(w) && w > 0 ? Math.round((it.unit_price || 0) * w * mult) : Number(it.line_total || 0);
+    return sum + line;
+  }, 0) + pieceItems.reduce((s, it) => s + Number(it.line_total || 0), 0);
+
+  const save = async () => {
+    setErr("");
+    // Every kg item must have a valid, positive weight.
+    for (const it of kgItems) {
+      const w = Number(weights[it.id]);
+      if (!weights[it.id] || !Number.isFinite(w) || w <= 0) {
+        setErr(`Enter the weighed value for "${it.product_name}".`);
+        return;
+      }
+    }
+    setSaving(true);
+    try {
+      const payload = kgItems.map((it) => ({ id: it.id, weight_kg: Number(weights[it.id]) }));
+      await api.applyActualWeights(order.id, payload);
+      // Advance to at_outlet now that it's weighed + priced.
+      await api.updateOrderStatus(order.id, "at_outlet");
+      toast && toast(`#${order.order_no} weighed — customer notified of the updated total`);
+      await onWeighed();
+    } catch (e) {
+      setErr(e.message || "Could not save weights.");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={`Weigh order · #${order.order_no}`}
+      sub="Enter the actual weight for each item. The price updates and the customer is notified."
+      onClose={onClose}
+      width={480}
+    >
+      {loading ? (
+        <p style={{ fontSize: 13, color: C.textMute, padding: "20px 0", textAlign: "center" }}>Loading items…</p>
+      ) : (
+        <>
+          {kgItems.length === 0 && (
+            <p style={{ fontSize: 13, color: C.textMute, marginBottom: 12 }}>
+              This order has no weight-based items — nothing to weigh. You can still mark it at outlet.
+            </p>
+          )}
+
+          {kgItems.map((it) => (
+            <div key={it.id} style={{ marginBottom: 14 }}>
+              <label style={fieldLabel}>
+                {it.product_name}{it.express ? " ⚡" : ""}
+                <span style={{ color: C.textFaint, fontWeight: 500 }}>
+                  {"  "}· est. {it.weight_kg ?? "?"} kg · ₹{it.unit_price}/kg
+                </span>
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  style={{ ...field, maxWidth: 140 }}
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={weights[it.id] ?? ""}
+                  onChange={(e) => setWeights((w) => ({ ...w, [it.id]: e.target.value }))}
+                  placeholder="Actual kg"
+                  autoFocus={it === kgItems[0]}
+                />
+                <span style={{ fontSize: 13, color: C.textMute }}>kg</span>
+              </div>
+            </div>
+          ))}
+
+          {pieceItems.length > 0 && (
+            <div style={{ marginTop: 6, marginBottom: 8 }}>
+              <p style={{ fontSize: 11.5, fontWeight: 700, color: C.textMute, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 6 }}>
+                Priced by piece (no weighing)
+              </p>
+              {pieceItems.map((it) => (
+                <div key={it.id} className="flex items-center justify-between" style={{ fontSize: 13, color: C.text, padding: "3px 0" }}>
+                  <span>{it.product_name}{it.express ? " ⚡" : ""} × {it.qty}</span>
+                  <span style={{ fontWeight: 600, color: C.navy }}>{inr(it.line_total)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between" style={{ borderTop: `1px solid ${C.borderSoft}`, paddingTop: 12, marginTop: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.navy }}>New subtotal (preview)</span>
+            <span style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 800, color: C.navy }}>{inr(preview)}</span>
+          </div>
+          {(() => {
+            const disc = Number(order.coins_discount || 0) + Number(order.coupon_discount || 0);
+            if (disc <= 0) return null;
+            const belowDiscount = preview <= disc;
+            return (
+              <p style={{ fontSize: 11.5, color: belowDiscount ? C.red : C.textFaint, marginTop: 4, fontWeight: belowDiscount ? 700 : 400 }}>
+                {belowDiscount
+                  ? `⚠ New subtotal is at/below the ₹${disc} discount on this order — remove the discount or re-check the weight, or saving will be blocked.`
+                  : `A ₹${disc} discount stays applied → final total ₹${Math.max(0, preview - disc)}.`}
+              </p>
+            );
+          })()}
+
+          {err && <div style={{ background: C.redLt, color: C.red, fontSize: 12.5, fontWeight: 600, padding: "9px 12px", borderRadius: 9, marginTop: 12 }}>{err}</div>}
+
+          <div className="flex justify-end gap-2" style={{ marginTop: 18 }}>
+            <Btn variant="outline" small onClick={onClose}>Cancel</Btn>
+            <Btn small onClick={save} disabled={saving}>{saving ? "Saving…" : "Save weights & mark at outlet"}</Btn>
+          </div>
+        </>
+      )}
+    </Modal>
   );
 }
 

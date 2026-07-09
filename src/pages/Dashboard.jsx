@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import {
-  Wallet, TrendingUp, ShoppingBag, Users as UsersIcon, Plus, ArrowUpRight, Download, Calendar, ArrowUp, ArrowDown,
+  Wallet, TrendingUp, ShoppingBag, Users as UsersIcon, Plus, ArrowUpRight, Download, Calendar, ArrowUp, ArrowDown, ReceiptText,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, AreaChart, Area,
@@ -29,13 +29,21 @@ function periodStats(orders, period) {
   const match = { day: inSameDay, month: inSameMonth, year: inSameYear }[period];
 
   let cur = 0, prev = 0, curCount = 0, prevCount = 0;
+  // Also track gross order worth (total) + collected for the CURRENT window,
+  // so the "Order Worth" tile can follow the selected period.
+  let curWorth = 0, curCollected = 0, curOutstanding = 0;
   orders.forEach((o) => {
     const d = new Date(o.created_at);
-    if (match(d, now))      { cur += collected(o);  curCount++; }
+    if (match(d, now)) {
+      cur += collected(o); curCount++;
+      curWorth += Number(o.total || 0);
+      curCollected += collected(o);
+      curOutstanding += balanceDue(o);
+    }
     if (match(d, lastYear)) { prev += collected(o); prevCount++; }
   });
   const delta = prev === 0 ? (cur > 0 ? 100 : 0) : ((cur - prev) / prev) * 100;
-  return { cur, prev, curCount, prevCount, delta };
+  return { cur, prev, curCount, prevCount, delta, curWorth, curCollected, curOutstanding };
 }
 
 const PERIOD_LABEL = {
@@ -166,6 +174,12 @@ export default function Dashboard({ orders, go, displayName, customers = [] }) {
 
       {/* ───── Stat tiles ───── */}
       <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", marginBottom: 18 }}>
+        <StatCard
+          tone="navy" icon={ReceiptText}
+          label={`Order Worth · ${lbl.now}`}
+          value={inr(stats.curWorth)}
+          sub={`${inr(stats.curCollected)} paid · ${inr(stats.curOutstanding)} outstanding`}
+        />
         <StatCard
           tone="teal" icon={Wallet}
           label="Total Sales (Paid)"

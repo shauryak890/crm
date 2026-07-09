@@ -57,6 +57,7 @@ const EMPTY_OUTLET = { code: "", name: "", address: "", phone: "" };
 
 export default function HQPanel({ profile, onExit }) {
   const [outlets, setOutlets] = useState([]);
+  const [supplyOrders, setSupplyOrders] = useState([]);
   const [orders, setOrders] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [expenses, setExpenses] = useState([]);
@@ -84,16 +85,17 @@ export default function HQPanel({ profile, onExit }) {
     setLoading(true);
     setErr("");
     try {
-      const [outl, ord, cust, exp, profs, items] = await Promise.all([
+      const [outl, ord, cust, exp, profs, items, supply] = await Promise.all([
         api.fetchOutlets(),
         api.fetchOrders(),       // super_admin → all outlets
         api.fetchCustomers(),
         api.fetchExpenses(),
         api.fetchProfiles(),
         api.fetchAllOrderItems(),
+        api.fetchSupplyOrders().catch(() => []),
       ]);
       setOutlets(outl); setOrders(ord); setCustomers(cust);
-      setExpenses(exp); setProfiles(profs); setOrderItems(items);
+      setExpenses(exp); setProfiles(profs); setOrderItems(items); setSupplyOrders(supply);
     } catch (e) {
       setErr(e.message || "Could not load HQ data.");
     }
@@ -541,6 +543,9 @@ export default function HQPanel({ profile, onExit }) {
         </div>
       </Card>
 
+      {/* Supply orders from outlets */}
+      <SupplyOrdersCard orders={supplyOrders} onReload={load} />
+
       {addOpen && (
         <Modal title="Add an outlet" sub="Creates a new store. Assign staff to it afterwards." onClose={() => setAddOpen(false)}>
           <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr" }}>
@@ -629,3 +634,77 @@ function Stat({ icon, tone, label, value, sub }) {
 }
 
 const tD = { padding: "13px 18px", fontSize: 13.5, color: C.text, borderTop: `1px solid ${C.borderSoft}`, verticalAlign: "middle" };
+
+/* ── Supply orders raised by outlets (HQ moves them through the flow) ── */
+const SUP_STATUS = ["requested", "approved", "dispatched", "received", "cancelled"];
+const SUP_LABEL = { requested: "Requested", approved: "Approved", dispatched: "Dispatched", received: "Received", cancelled: "Cancelled" };
+const SUP_TONE = { requested: "warn", approved: "info", dispatched: "info", received: "success", cancelled: "danger" };
+
+function SupplyOrdersCard({ orders, onReload }) {
+  const [open, setOpen] = useState(null);   // order being expanded
+  const [lines, setLines] = useState([]);
+  const setStatus = async (o, status) => {
+    try { await api.updateSupplyOrderStatus(o.id, status); await onReload(); }
+    catch (e) { alert("Could not update: " + e.message); }
+  };
+  const toggle = async (o) => {
+    if (open === o.id) { setOpen(null); return; }
+    setOpen(o.id); setLines([]);
+    try { setLines(await api.fetchSupplyOrderItems(o.id)); } catch {}
+  };
+  const pending = orders.filter((o) => o.status === "requested").length;
+
+  return (
+    <Card pad={false} style={{ marginTop: 18 }}>
+      <div className="flex items-center justify-between" style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderSoft}` }}>
+        <h3 className="inline-flex items-center gap-2" style={{ fontWeight: 700, fontSize: 15, color: C.navy }}>
+          <Package size={16} color={C.tealDark} /> Supply orders from outlets
+        </h3>
+        {pending > 0 && <Badge tone="warn">{pending} awaiting approval</Badge>}
+      </div>
+      {orders.length === 0 ? (
+        <p style={{ color: C.textMute, fontSize: 13.5, padding: 20 }}>No supply orders yet.</p>
+      ) : orders.map((o) => (
+        <div key={o.id} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+          <div className="flex items-center justify-between gap-3" style={{ padding: "13px 20px", flexWrap: "wrap" }}>
+            <button onClick={() => toggle(o)} style={{ background: "transparent", border: "none", cursor: "pointer", textAlign: "left", padding: 0, flex: 1, minWidth: 200 }}>
+              <div className="flex items-center gap-2">
+                <span style={{ fontWeight: 700, color: C.navy, fontSize: 14 }}>#{o.order_no}</span>
+                <Badge tone={SUP_TONE[o.status]}>{SUP_LABEL[o.status] || o.status}</Badge>
+              </div>
+              <p style={{ fontSize: 12, color: C.textFaint, marginTop: 2 }}>
+                {o.outlet?.name || "—"} · {new Date(o.created_at).toLocaleDateString("en-GB")}{o.requester ? ` · ${o.requester}` : ""}
+              </p>
+              {o.note && <p style={{ fontSize: 12, color: C.textMute, marginTop: 2, fontStyle: "italic" }}>"{o.note}"</p>}
+            </button>
+            <div className="flex items-center gap-3">
+              <span style={{ fontWeight: 800, color: C.navy, fontSize: 15 }}>{inr(o.total)}</span>
+              {o.status !== "cancelled" && o.status !== "received" && (
+                <select value={o.status} onChange={(e) => setStatus(o, e.target.value)}
+                  style={{ border: `1px solid ${C.border}`, borderRadius: 9, padding: "6px 8px", fontSize: 12.5, fontWeight: 600, color: C.navy, background: "#fff" }}>
+                  {SUP_STATUS.filter((s) => s !== "cancelled").map((s) => <option key={s} value={s}>{SUP_LABEL[s]}</option>)}
+                </select>
+              )}
+            </div>
+          </div>
+          {open === o.id && (
+            <div style={{ padding: "0 20px 14px", background: C.bg }}>
+              {lines.length === 0 ? <p style={{ fontSize: 12.5, color: C.textFaint, padding: "10px 0" }}>Loading items…</p> :
+                <table style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse" }}>
+                  <tbody>
+                    {lines.map((l) => (
+                      <tr key={l.id} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
+                        <td style={{ padding: "7px 0", color: C.text }}>{l.item_name}</td>
+                        <td style={{ padding: "7px 0", textAlign: "right", color: C.textMute }}>{l.qty} {l.unit} × {inr(l.unit_price)}</td>
+                        <td style={{ padding: "7px 0 7px 16px", textAlign: "right", fontWeight: 700, color: C.navy }}>{inr(l.line_total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>}
+            </div>
+          )}
+        </div>
+      ))}
+    </Card>
+  );
+}

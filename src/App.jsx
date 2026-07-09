@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   LayoutDashboard, ShoppingCart, ReceiptText, Truck, Users as UsersIcon, Wallet, UserCog,
   BarChart3, ClipboardList, Settings as SettingsIcon, Smartphone, MapPin, Search, Bell,
-  Menu, Check, LogOut, Tag, Lock, Minimize2,
+  Menu, Check, LogOut, Tag, Lock, Minimize2, PackagePlus,
 } from "lucide-react";
 
 import { C, DISPLAY, inr, collected } from "./theme";
@@ -19,6 +19,7 @@ import OrderStatus from "./pages/OrderStatus";
 import Delivery from "./pages/Delivery";
 import Customers from "./pages/Customers";
 import Expenses from "./pages/Expenses";
+import Supplies from "./pages/Supplies";
 import Reports from "./pages/Reports";
 import Users from "./pages/Users";
 import Settings from "./pages/Settings";
@@ -40,6 +41,7 @@ const NAV = [
   { section: "Directory", items: [
     { id: "customers", label: "Customers", icon: UsersIcon },
     { id: "expenses", label: "Expenses", icon: Wallet },
+    { id: "supplies", label: "Reorder Stock", icon: PackagePlus },
   ]},
   { section: "Insights", items: [
     { id: "reports", label: "Reports", icon: BarChart3 },
@@ -396,6 +398,7 @@ export default function App() {
           {view === "delivery" && <Delivery orders={orders} />}
           {view === "customers" && <Customers customers={customers} orders={orders} loading={loading} onAdd={onAddCustomer} onDelete={onDeleteCustomer} />}
           {view === "expenses" && <Expenses expenses={expenses} loading={loading} onAdd={onAddExpense} onDelete={onDeleteExpense} />}
+          {view === "supplies" && <Supplies profile={profile} toast={toast} isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} />}
           {view === "reports" && <Reports orders={orders} expenses={expenses} customers={customers} orderItems={orderItems} />}
           {view === "catalogue" && <Catalogue onRefresh={refresh} toast={toast} />}
           {view === "users" && <Users profiles={profiles} loading={loading} onRefresh={refresh} toast={toast} />}
