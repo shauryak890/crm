@@ -34,10 +34,13 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
     i.name.toLowerCase().includes(search.toLowerCase())
   );
 
+  const hasPrice = (it) => it.price != null && Number(it.price) > 0;
   const setQty = (id, q) => setCart((c) => { const n = { ...c }; if (q <= 0) delete n[id]; else n[id] = q; return n; });
   const cartLines = Object.entries(cart).map(([id, qty]) => {
     const it = items.find((x) => x.id === id);
-    return it ? { ...it, qty, line_total: Math.round(it.price * qty) } : null;
+    if (!it) return null;
+    const price = Number(it.price) || 0;
+    return { ...it, qty, line_total: Math.round(price * qty) };
   }).filter(Boolean);
   const cartTotal = cartLines.reduce((a, l) => a + l.line_total, 0);
 
@@ -103,8 +106,14 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
                 return (
                   <div key={it.id} className="flex items-center gap-3" style={{ padding: "10px 12px", borderTop: `1px solid ${C.borderSoft}` }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ fontSize: 13.5, fontWeight: 600, color: C.navy }}>{it.name}</p>
-                      <p style={{ fontSize: 11.5, color: C.textFaint }}>{it.price > 0 ? inr(it.price) : "Price TBD"} / {it.unit}{it.pack_note ? ` · ${it.pack_note}` : ""}</p>
+                      <div className="flex items-center gap-2">
+                        <p style={{ fontSize: 13.5, fontWeight: 600, color: C.navy }}>{it.name}</p>
+                        {it.specification && <span style={{ fontSize: 11, color: C.textMute, background: C.bg, padding: "1px 7px", borderRadius: 99 }}>{it.specification}</span>}
+                      </div>
+                      <p style={{ fontSize: 11.5, color: C.textFaint, marginTop: 2 }}>
+                        <b style={{ color: hasPrice(it) ? C.tealDark : C.amber }}>{hasPrice(it) ? inr(it.price) : "N/A"}</b>
+                        {it.moq ? ` · MOQ ${it.moq}` : ""}
+                      </p>
                     </div>
                     {q > 0 ? (
                       <div className="flex items-center gap-2">
@@ -136,10 +145,10 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
               <div key={l.id} className="flex items-center justify-between" style={{ padding: "11px 18px", borderTop: `1px solid ${C.borderSoft}` }}>
                 <div style={{ minWidth: 0 }}>
                   <p style={{ fontSize: 13, fontWeight: 600, color: C.navy, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</p>
-                  <p style={{ fontSize: 11.5, color: C.textFaint }}>{l.qty} {l.unit} × {inr(l.price)}</p>
+                  <p style={{ fontSize: 11.5, color: C.textFaint }}>{l.qty} {l.unit} × {hasPrice(l) ? inr(l.price) : "N/A"}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span style={{ fontWeight: 700, fontSize: 13, color: C.navy }}>{inr(l.line_total)}</span>
+                  <span style={{ fontWeight: 700, fontSize: 13, color: hasPrice(l) ? C.navy : C.amber }}>{hasPrice(l) ? inr(l.line_total) : "N/A"}</span>
                   <button onClick={() => setQty(l.id, 0)} style={{ border: "none", background: C.redLt, color: C.red, width: 28, height: 28, borderRadius: 8, cursor: "pointer" }}><Trash2 size={13} /></button>
                 </div>
               </div>
@@ -148,10 +157,13 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
           <div style={{ padding: 18, borderTop: `1px solid ${C.borderSoft}`, background: C.paper }}>
             <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Note for HQ (optional) — e.g. urgent, running low on…"
               style={{ width: "100%", border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 11px", fontSize: 13, outline: "none", resize: "vertical", marginBottom: 10 }} />
-            <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: cartLines.some((l) => !hasPrice(l)) ? 4 : 12 }}>
               <span style={{ fontSize: 13, color: C.textMute }}>Estimated total</span>
               <span style={{ fontSize: 18, fontWeight: 800, color: C.navy }}>{inr(cartTotal)}</span>
             </div>
+            {cartLines.some((l) => !hasPrice(l)) && (
+              <p style={{ fontSize: 11, color: C.amber, marginBottom: 12 }}>Some items are priced "N/A" — HQ will confirm their cost.</p>
+            )}
             {err && <div style={{ background: C.redLt, color: C.red, fontSize: 12.5, fontWeight: 600, padding: "9px 12px", borderRadius: 9, marginBottom: 10 }}>{err}</div>}
             <Btn variant="primary" icon={Send} full onClick={submit} disabled={busy}>Send order to HQ</Btn>
           </div>

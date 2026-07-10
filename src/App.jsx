@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
-  LayoutDashboard, ShoppingCart, ReceiptText, Truck, Users as UsersIcon, Wallet, UserCog,
+  LayoutDashboard, ShoppingCart, ReceiptText, Truck, Users as UsersIcon, UserCog,
   BarChart3, ClipboardList, Settings as SettingsIcon, Smartphone, MapPin, Search, Bell,
-  Menu, Check, LogOut, Tag, Lock, Minimize2, PackagePlus,
+  Menu, Check, LogOut, Tag, Lock, Minimize2, PackagePlus, Wallet,
 } from "lucide-react";
 
 import { C, DISPLAY, inr, collected } from "./theme";
@@ -18,8 +18,8 @@ import Sales from "./pages/Sales";
 import OrderStatus from "./pages/OrderStatus";
 import Delivery from "./pages/Delivery";
 import Customers from "./pages/Customers";
-import Expenses from "./pages/Expenses";
 import Supplies from "./pages/Supplies";
+import Expenses from "./pages/Expenses";
 import Reports from "./pages/Reports";
 import Users from "./pages/Users";
 import Settings from "./pages/Settings";
@@ -40,8 +40,8 @@ const NAV = [
   ]},
   { section: "Directory", items: [
     { id: "customers", label: "Customers", icon: UsersIcon },
-    { id: "expenses", label: "Expenses", icon: Wallet },
     { id: "supplies", label: "Reorder Stock", icon: PackagePlus },
+    { id: "expenses", label: "Expenses", icon: Wallet },
   ]},
   { section: "Insights", items: [
     { id: "reports", label: "Reports", icon: BarChart3 },
@@ -282,11 +282,6 @@ export default function App() {
       return null;
     }
   };
-  const onDeleteCustomer = async (c) => {
-    if (!confirm(`Delete ${c.first_name} ${c.last_name}?`)) return;
-    try { await api.deleteCustomer(c.id); toast("Customer deleted"); await refresh(); }
-    catch (e) { toast("Delete failed: " + e.message); }
-  };
   const onAddExpense = async (e) => {
     try { await api.createExpense(e); toast("Expense added"); await refresh(); return true; }
     catch (err) { toast("Could not add: " + err.message); return false; }
@@ -295,6 +290,11 @@ export default function App() {
     if (!confirm(`Delete ${e.title}?`)) return;
     try { await api.deleteExpense(e.id); toast("Expense deleted"); await refresh(); }
     catch (err) { toast("Delete failed: " + err.message); }
+  };
+  const onDeleteCustomer = async (c) => {
+    if (!confirm(`Delete ${c.first_name} ${c.last_name}?`)) return;
+    try { await api.deleteCustomer(c.id); toast("Customer deleted"); await refresh(); }
+    catch (e) { toast("Delete failed: " + e.message); }
   };
   const logout = async () => { await supabase.auth.signOut(); };
 
@@ -397,8 +397,8 @@ export default function App() {
           {view === "orderstatus" && <OrderStatus orders={orders} onStatus={onStatus} />}
           {view === "delivery" && <Delivery orders={orders} />}
           {view === "customers" && <Customers customers={customers} orders={orders} loading={loading} onAdd={onAddCustomer} onDelete={onDeleteCustomer} />}
-          {view === "expenses" && <Expenses expenses={expenses} loading={loading} onAdd={onAddExpense} onDelete={onDeleteExpense} />}
           {view === "supplies" && <Supplies profile={profile} toast={toast} isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} />}
+          {view === "expenses" && <Expenses expenses={expenses} loading={loading} onAdd={onAddExpense} onDelete={onDeleteExpense} />}
           {view === "reports" && <Reports orders={orders} expenses={expenses} customers={customers} orderItems={orderItems} />}
           {view === "catalogue" && <Catalogue onRefresh={refresh} toast={toast} />}
           {view === "users" && <Users profiles={profiles} loading={loading} onRefresh={refresh} toast={toast} />}
