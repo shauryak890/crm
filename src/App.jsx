@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   LayoutDashboard, ShoppingCart, ReceiptText, Truck, Users as UsersIcon, UserCog,
   BarChart3, ClipboardList, Settings as SettingsIcon, Smartphone, MapPin, Search, Bell,
-  Menu, Check, LogOut, Tag, Lock, Minimize2, PackagePlus, Wallet,
+  Menu, Check, LogOut, Tag, Lock, Minimize2, PackagePlus, Wallet, BadgePercent,
 } from "lucide-react";
 
 import { C, DISPLAY, inr, collected } from "./theme";
@@ -19,6 +19,7 @@ import OrderStatus from "./pages/OrderStatus";
 import Delivery from "./pages/Delivery";
 import Customers from "./pages/Customers";
 import Supplies from "./pages/Supplies";
+import Subscriptions from "./pages/Subscriptions";
 import Expenses from "./pages/Expenses";
 import Reports from "./pages/Reports";
 import Users from "./pages/Users";
@@ -41,6 +42,7 @@ const NAV = [
   { section: "Directory", items: [
     { id: "customers", label: "Customers", icon: UsersIcon },
     { id: "supplies", label: "Reorder Stock", icon: PackagePlus },
+    { id: "subscriptions", label: "Subscriptions", icon: BadgePercent },
     { id: "expenses", label: "Expenses", icon: Wallet },
   ]},
   { section: "Insights", items: [
@@ -103,6 +105,8 @@ export default function App() {
   const [customers, setCustomers] = useState([]);
   const [orders, setOrders] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  const [subscriptions, setSubscriptions] = useState([]);
+  const [subscriptionPlans, setSubscriptionPlans] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [orderItems, setOrderItems] = useState([]);
   const [outlets, setOutlets] = useState([]);
@@ -145,13 +149,15 @@ export default function App() {
     if (!session) return;
     setLoading(true);
     try {
-      const [prod, cust, ord, exp, profs, items, outs] = await Promise.all([
+      const [prod, cust, ord, exp, subs, plans, profs, items, outs] = await Promise.all([
         api.fetchProducts(), api.fetchCustomers(), api.fetchOrders(),
-        api.fetchExpenses(), api.fetchProfiles(), api.fetchOrderItems(),
+        api.fetchExpenses(), api.fetchCustomerSubscriptions().catch(() => []),
+        api.fetchSubscriptionPlans().catch(() => []),
+        api.fetchProfiles(), api.fetchOrderItems(),
         api.fetchOutlets().catch(() => []),
       ]);
       setProducts(prod); setCustomers(cust); setOrders(ord);
-      setExpenses(exp); setProfiles(profs); setOrderItems(items); setOutlets(outs);
+      setExpenses(exp); setSubscriptions(subs); setSubscriptionPlans(plans); setProfiles(profs); setOrderItems(items); setOutlets(outs);
       setProfile(profs.find((p) => p.id === session.user.id) || null);
     } catch (e) {
       toast("Load error: " + e.message);
@@ -291,6 +297,33 @@ export default function App() {
     try { await api.deleteExpense(e.id); toast("Expense deleted"); await refresh(); }
     catch (err) { toast("Delete failed: " + err.message); }
   };
+  // Deduct kg from a customer's active subscription after a POS sale bills
+  // against it. Called with the subscription row + the kg consumed by
+  // this order; the CRM keeps a local optimistic update so the POS badge
+  // reflects the new balance immediately, then reconciles on refresh.
+  const onUseSubscription = async (sub, kgUsed) => {
+    const newTotal = Number(sub.weight_used_kg) + kgUsed;
+    setSubscriptions((p) => p.map((s) => (s.id === sub.id ? { ...s, weight_used_kg: newTotal } : s)));
+    try { await api.useSubscriptionWeight(sub.id, newTotal); }
+    catch (e) { toast("Subscription update failed: " + e.message); await refresh(); }
+  };
+  // Sell a subscription plan straight from the POS counter. Returns the
+  // created row (or null on failure) so POS can trigger the WhatsApp
+  // activation notice with the real purchased/expiry dates.
+  const onSellSubscription = async (customer, plan) => {
+    const outletId = isSuperAdmin ? billingOutletId : null;
+    if (isSuperAdmin && !outletId) { toast("Pick the outlet this order belongs to first."); return null; }
+    try {
+      const created = await api.createCustomerSubscription({ customerId: customer.id, plan, outletId });
+      toast(`${plan.name} subscription sold to ${customer.first_name}`);
+      await refresh();
+      return created;
+    } catch (e) {
+      const msg = /duplicate key|unique/i.test(e.message) ? "This customer already has an active subscription." : e.message;
+      toast("Could not sell plan: " + msg);
+      return null;
+    }
+  };
   const onDeleteCustomer = async (c) => {
     if (!confirm(`Delete ${c.first_name} ${c.last_name}?`)) return;
     try { await api.deleteCustomer(c.id); toast("Customer deleted"); await refresh(); }
@@ -389,7 +422,9 @@ export default function App() {
             <>
           {view === "dashboard" && <Dashboard orders={orders} expenses={expenses} go={go} displayName={displayName} customers={customers} />}
           {view === "pos" && <POS products={products} customers={customers} orders={orders} onPay={onPay} focusMode={focusMode} setFocusMode={setFocusMode} isAdmin={isAdmin} onQuickAddProduct={onQuickAddProduct}
-            isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} />}
+            isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId}
+            subscriptions={subscriptions} onUseSubscription={onUseSubscription}
+            subscriptionPlans={subscriptionPlans} onSellSubscription={onSellSubscription} />}
           {view === "sales" && <Sales orders={orders} loading={loading} products={products} isAdmin={isAdmin}
             onStatus={onStatus} onTogglePaid={onTogglePaid} onOpenInvoice={setInvoiceOrder}
             onEditOrder={onEditOrder} onQuickAddProduct={onQuickAddProduct}
@@ -398,6 +433,7 @@ export default function App() {
           {view === "delivery" && <Delivery orders={orders} />}
           {view === "customers" && <Customers customers={customers} orders={orders} loading={loading} onAdd={onAddCustomer} onDelete={onDeleteCustomer} />}
           {view === "supplies" && <Supplies profile={profile} toast={toast} isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} />}
+          {view === "subscriptions" && <Subscriptions profile={profile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} customers={customers} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} toast={toast} onRefresh={refresh} />}
           {view === "expenses" && <Expenses expenses={expenses} loading={loading} onAdd={onAddExpense} onDelete={onDeleteExpense} />}
           {view === "reports" && <Reports orders={orders} expenses={expenses} customers={customers} orderItems={orderItems} />}
           {view === "catalogue" && <Catalogue onRefresh={refresh} toast={toast} />}

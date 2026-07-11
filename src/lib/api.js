@@ -530,6 +530,81 @@ export async function updateSupplyOrderStatus(id, status, hq_note) {
   if (error) throw error;
 }
 
+// ── Customer subscriptions ──────────────────────────────────────────
+export async function fetchSubscriptionPlans() {
+  const { data, error } = await supabase
+    .from("subscription_plans")
+    .select("*")
+    .eq("active", true)
+    .order("sort", { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
+export async function fetchAllSubscriptionPlans() {
+  const { data, error } = await supabase
+    .from("subscription_plans")
+    .select("*")
+    .order("sort", { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
+export async function createSubscriptionPlan(p) {
+  const { data, error } = await supabase.from("subscription_plans").insert(p).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateSubscriptionPlan(id, patch) {
+  const { data, error } = await supabase.from("subscription_plans").update(patch).eq("id", id).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// Fetch every customer subscription. RLS scopes: outlet sees its own,
+// super_admin sees all.
+export async function fetchCustomerSubscriptions() {
+  const { data, error } = await supabase
+    .from("customer_subscriptions")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+// Sell a plan to a customer. `outletId` is only needed for a super_admin
+// (who has no home outlet). Blocked by a DB unique index if the customer
+// already holds an active subscription.
+export async function createCustomerSubscription({ customerId, plan, outletId }) {
+  const row = {
+    customer_id: customerId,
+    plan_id: plan.id,
+    plan_name: plan.name,
+    price_paid: Number(plan.price) || 0,
+    weight_limit_kg: Number(plan.weight_limit_kg) || 0,
+  };
+  if (outletId) row.outlet_id = outletId; // super_admin path
+  const { data, error } = await supabase.from("customer_subscriptions").insert(row).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// Deduct kg used against an active subscription (POS billing hook).
+// Caller passes the new running total (existing weight_used_kg + this order's kg).
+export async function useSubscriptionWeight(id, newUsedTotal) {
+  const { error } = await supabase
+    .from("customer_subscriptions")
+    .update({ weight_used_kg: newUsedTotal })
+    .eq("id", id);
+  if (error) throw error;
+}
+
+export async function cancelCustomerSubscription(id) {
+  const { error } = await supabase.from("customer_subscriptions").update({ status: "cancelled" }).eq("id", id);
+  if (error) throw error;
+}
+
 // A super_admin's normal fetchOrders/fetchCustomers/fetchExpenses/
 // fetchProfiles already return EVERY outlet's rows (RLS grants the
 // bypass), so HQ reuses those — no separate "all outlets" query needed.

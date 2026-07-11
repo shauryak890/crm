@@ -195,7 +195,9 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
 
     const disc = Number(order.discount_pct) || 0;
     const tax = Number(order.tax_pct) || 0;
-    const sub = Number(order.subtotal) || items.reduce((a, it) => a + Number(it.line_total || 0), 0);
+    const grossSub = items.reduce((a, it) => a + Number(it.line_total || 0), 0);
+    const subDiscount = Number(order.subscription_discount) || 0;
+    const sub = Number(order.subtotal) || grossSub;
     const bal = Math.max(0, Number(order.total || 0) - collected(order));
     const totalPieces = items.reduce((a, it) => a + Number(it.qty || 0), 0);
 
@@ -208,6 +210,8 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
       ...itemLines,
       `--------------------`,
       `Total items: ${totalPieces} pc${totalPieces === 1 ? "" : "s"}`,
+      subDiscount > 0 ? `Item total: ${inr(grossSub)}` : null,
+      subDiscount > 0 ? `Subscription discount: -${inr(subDiscount)}` : null,
       `Subtotal: ${inr(sub)}`,
       disc > 0 ? `Discount (${disc}%): -${inr(Math.round(sub * disc / 100))}` : null,
       tax > 0 ? `Tax (${tax}%): +${inr(Math.round(sub * tax / 100))}` : null,

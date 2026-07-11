@@ -1,12 +1,36 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Search, Shirt, ShoppingCart, Trash2, Banknote, Printer, X, Plus, UserCheck, Camera, FileText, Pencil,
-  Users as UsersIcon, Maximize2, Minimize2, Image as ImageIcon,
+  Users as UsersIcon, Maximize2, Minimize2, Image as ImageIcon, BadgePercent,
 } from "lucide-react";
-import { C, DISPLAY, SERVICE_TYPES, PAYMENT_METHODS, DAILY_CAPACITY, inr } from "../theme";
+import { C, DISPLAY, STORE, SERVICE_TYPES, PAYMENT_METHODS, DAILY_CAPACITY, inr } from "../theme";
 import * as api from "../lib/api";
 import { Card, PageHead, Btn, iconBtn, Modal, field, fieldLabel } from "../components/ui";
 import CameraCapture from "../components/CameraCapture";
+
+const fmtDate = (s) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
+
+// WhatsApp the customer that their subscription is now active, with the
+// plan, weight limit, and the exact start/expiry dates.
+function notifySubscriptionWhatsApp(phone, firstName, sub) {
+  const num = String(phone || "").replace(/\D/g, "");
+  if (!num) return;
+  const lines = [
+    `*${STORE.name}*`,
+    `Dear ${firstName},`,
+    ``,
+    `Your *${sub.plan_name}* subscription is now active!`,
+    `Weight limit: ${sub.weight_limit_kg} kg`,
+    `Started: ${fmtDate(sub.purchased_at)}`,
+    `Valid until: ${fmtDate(sub.expires_at)}`,
+    ``,
+    `Every wash is deducted from your plan automatically at checkout — just drop off your laundry with us.`,
+    ``,
+    `Thank you for choosing ${STORE.name}!`,
+  ].join("\n");
+  const wa = num.length === 10 ? "91" + num : num;
+  window.open(`https://wa.me/${wa}?text=${encodeURIComponent(lines)}`, "_blank");
+}
 
 const posLbl = { fontSize: 11.5, fontWeight: 700, color: C.textMute, marginBottom: 6, display: "block", textTransform: "uppercase", letterSpacing: ".03em" };
 const posField = { width: "100%", border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 11px", fontSize: 13.5, outline: "none", background: "#fff", color: C.text };
@@ -29,7 +53,8 @@ const splitName = (full) => {
 };
 
 export default function POS({ products, customers, orders = [], onPay, focusMode, setFocusMode, isAdmin, onQuickAddProduct,
-  isSuperAdmin, outlets = [], billingOutletId, setBillingOutletId }) {
+  isSuperAdmin, outlets = [], billingOutletId, setBillingOutletId, subscriptions = [], onUseSubscription,
+  subscriptionPlans = [], onSellSubscription }) {
   const [cart, setCart] = useState([]);
   const [modal, setModal] = useState(null);          // product object
   const [editingKey, setEditingKey] = useState(null); // cart key being edited (null = adding new)
@@ -62,6 +87,10 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
   // Client picker
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQuery, setPickerQuery] = useState("");
+
+  // Sell-a-subscription modal (opened for the currently matched customer).
+  const [sellPlanOpen, setSellPlanOpen] = useState(false);
+  const [sellPlanBusy, setSellPlanBusy] = useState(false);
 
   const pickClient = (c) => {
     const full = `${c.first_name} ${c.last_name || ""}`.trim();
@@ -121,6 +150,33 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
     if (p.length < 10) return null;
     return customers.find((c) => normPhone(c.phone) === p) || null;
   }, [phone, customers]);
+
+  // The matched customer's active, unexpired subscription (if any) — kg
+  // billed on this order draws down its remaining balance for free until
+  // it runs out, then normal per-kg pricing resumes for the rest.
+  const activeSubscription = useMemo(() => {
+    if (!matched) return null;
+    return subscriptions.find((s) =>
+      s.customer_id === matched.id && s.status === "active" && new Date(s.expires_at) >= new Date()
+    ) || null;
+  }, [matched, subscriptions]);
+  const subRemainingKg = activeSubscription
+    ? Math.max(0, Number(activeSubscription.weight_limit_kg) - Number(activeSubscription.weight_used_kg))
+    : 0;
+
+  // Sell a plan to whoever is currently matched at the counter. Requires
+  // an existing (saved) customer — a brand-new walk-in is only created
+  // once they're billed, so the plan is sold right after or on a repeat visit.
+  const sellPlan = async (plan) => {
+    if (!matched || sellPlanBusy) return;
+    setSellPlanBusy(true);
+    const created = await onSellSubscription(matched, plan);
+    setSellPlanBusy(false);
+    if (created) {
+      notifySubscriptionWhatsApp(matched.phone, matched.first_name, created);
+      setSellPlanOpen(false);
+    }
+  };
 
   // Live suggestions while typing — partial phone (4+ digits) OR name
   // (2+ letters). Helps the cashier catch a returning customer.
@@ -273,9 +329,30 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
   };
 
   const sub = cart.reduce((a, i) => a + i.line_total, 0);
+
+  // ---- Subscription auto-split ---------------------------------------
+  // Walk the kg-priced cart lines in order, covering as much weight as
+  // the remaining subscription balance allows (at that line's own
+  // effective ₹/kg, so express pricing is respected) — free until the
+  // balance runs out, then normal pricing resumes for the rest.
+  let subKgCovered = 0, subAmountCovered = 0;
+  if (activeSubscription && subRemainingKg > 0) {
+    let left = subRemainingKg;
+    for (const i of cart) {
+      if (left <= 0 || i.unit !== "kg" || !i.weight_kg) continue;
+      const covered = Math.min(left, Number(i.weight_kg));
+      const rate = i.line_total / Number(i.weight_kg); // effective ₹/kg incl. express
+      subAmountCovered += covered * rate;
+      subKgCovered += covered;
+      left -= covered;
+    }
+    subAmountCovered = Math.round(subAmountCovered);
+  }
+
+  const subAfter = Math.max(0, sub - subAmountCovered);
   // Enforce the new-customer cap in the maths too, as a safety net.
   const effectiveDisc = isNewCustomer ? Math.min(disc, NEW_CUST_MAX_DISC) : disc;
-  const total = Math.max(0, Math.round(sub - (sub * effectiveDisc) / 100 + (sub * tax) / 100));
+  const total = Math.max(0, Math.round(subAfter - (subAfter * effectiveDisc) / 100 + (subAfter * tax) / 100));
 
   // ---- Daily processing capacity -----------------------------------
   // Garment count this cart adds (qty is the piece count on both piece-
@@ -358,7 +435,8 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
         address: address.trim(),
         fulfilment,
         due_date: dueDate,
-        subtotal: sub,
+        subtotal: subAfter,
+        subscription_discount: subAmountCovered || null,
         discount_pct: effectiveDisc,
         tax_pct: tax,
         total,
@@ -378,6 +456,9 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
       const items = cart.map(({ key, addons, ...rest }) => rest);
       const ok = await onPay(order, items);
       if (ok) {
+        if (activeSubscription && subKgCovered > 0) {
+          onUseSubscription && onUseSubscription(activeSubscription, subKgCovered);
+        }
         setCart([]); setDisc(0); setTax(0); setAmountReceived("");
         setName(""); setPhone(""); setAddress("");
         discTouched.current = false; setShowSuggest(false);
@@ -487,8 +568,21 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
               </button>
             </div>
             {matched && (
-              <div className="flex items-center gap-2 rounded-xl" style={{ background: C.tealLight, color: C.tealDark, padding: "8px 12px", fontSize: 12, fontWeight: 700 }}>
-                <UserCheck size={14} /> Existing client · {matched.code}
+              <div className="flex items-center justify-between rounded-xl" style={{ background: C.tealLight, color: C.tealDark, padding: "8px 12px", fontSize: 12, fontWeight: 700 }}>
+                <span className="flex items-center gap-2"><UserCheck size={14} /> Existing client · {matched.code}</span>
+                {!activeSubscription && (
+                  <button type="button" onClick={() => setSellPlanOpen(true)}
+                    className="flex items-center gap-1 wb-press"
+                    style={{ background: C.navy, color: "#fff", border: "none", padding: "4px 9px", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                    <BadgePercent size={12} /> Sell subscription
+                  </button>
+                )}
+              </div>
+            )}
+            {activeSubscription && (
+              <div className="flex items-center justify-between rounded-xl" style={{ background: "#EAF7F0", color: C.green, padding: "8px 12px", fontSize: 12, fontWeight: 700 }}>
+                <span>✓ {activeSubscription.plan_name} · {subRemainingKg.toFixed(1)} kg left</span>
+                {subKgCovered > 0 && <span>{subKgCovered.toFixed(1)} kg free this order</span>}
               </div>
             )}
             {!matched && isNewCustomer && (
@@ -676,6 +770,12 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
                 <span style={{ fontWeight: 700, color: C.navy, fontSize: 13 }}>{inr(sub)}</span>
               </div>
             </div>
+            {subAmountCovered > 0 && (
+              <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                <span style={{ color: C.green, fontSize: 12.5, fontWeight: 600 }}>Subscription ({subKgCovered.toFixed(1)} kg)</span>
+                <span style={{ fontWeight: 700, color: C.green, fontSize: 13 }}>−{inr(subAmountCovered)}</span>
+              </div>
+            )}
             <div className="flex items-center justify-between" style={{ marginBottom: 9 }}>
               <span style={{ fontWeight: 800, fontSize: 15, color: C.navy }}>Total</span>
               <span style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 19, color: C.tealDark }}>{inr(total)}</span>
@@ -721,6 +821,30 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
       {/* live camera */}
       {cameraOpen && (
         <CameraCapture onCapture={onCameraShot} onClose={() => setCameraOpen(false)} />
+      )}
+
+      {/* sell a subscription plan to the matched customer */}
+      {sellPlanOpen && matched && (
+        <Modal title={`Sell a plan · ${matched.first_name} ${matched.last_name || ""}`.trim()}
+          sub="Charged now; balance is tracked and applied automatically on future kg orders."
+          onClose={() => setSellPlanOpen(false)}>
+          <div className="flex flex-col gap-2">
+            {subscriptionPlans.filter((p) => p.active !== false).map((p) => (
+              <button key={p.id} onClick={() => sellPlan(p)} disabled={sellPlanBusy}
+                className="flex items-center justify-between wb-press"
+                style={{ border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", background: "#fff", cursor: sellPlanBusy ? "default" : "pointer", textAlign: "left" }}>
+                <div>
+                  <p style={{ fontWeight: 700, color: C.navy, fontSize: 13.5 }}>{p.name}</p>
+                  <p style={{ fontSize: 11.5, color: C.textMute, marginTop: 2 }}>{p.weight_limit_kg} kg · valid 30 days</p>
+                </div>
+                <span style={{ fontWeight: 800, color: C.tealDark, fontSize: 15 }}>{inr(p.price)}</span>
+              </button>
+            ))}
+            {subscriptionPlans.length === 0 && (
+              <p style={{ color: C.textMute, fontSize: 13 }}>No plans set up yet — add one from the Subscriptions page.</p>
+            )}
+          </div>
+        </Modal>
       )}
 
       {/* quick-add product */}
