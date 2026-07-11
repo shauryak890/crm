@@ -387,7 +387,7 @@ export default function App() {
           <div key={view} className="wb-enter">
           {ADMIN_VIEWS.has(view) && !isAdmin ? <AccessDenied /> : (
             <>
-          {view === "dashboard" && <Dashboard orders={orders} go={go} displayName={displayName} customers={customers} />}
+          {view === "dashboard" && <Dashboard orders={orders} expenses={expenses} go={go} displayName={displayName} customers={customers} />}
           {view === "pos" && <POS products={products} customers={customers} orders={orders} onPay={onPay} focusMode={focusMode} setFocusMode={setFocusMode} isAdmin={isAdmin} onQuickAddProduct={onQuickAddProduct}
             isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} />}
           {view === "sales" && <Sales orders={orders} loading={loading} products={products} isAdmin={isAdmin}

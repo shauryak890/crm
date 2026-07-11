@@ -197,15 +197,17 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
     const tax = Number(order.tax_pct) || 0;
     const sub = Number(order.subtotal) || items.reduce((a, it) => a + Number(it.line_total || 0), 0);
     const bal = Math.max(0, Number(order.total || 0) - collected(order));
+    const totalPieces = items.reduce((a, it) => a + Number(it.qty || 0), 0);
 
     const lines = [
       `*${STORE.name}*`,
-      `🧾 Invoice *#${order.order_no}*`,
+      `Invoice *#${order.order_no}*`,
       `Dear ${order.customer_name},`,
       ``,
       `*Your order:*`,
       ...itemLines,
       `--------------------`,
+      `Total items: ${totalPieces} pc${totalPieces === 1 ? "" : "s"}`,
       `Subtotal: ${inr(sub)}`,
       disc > 0 ? `Discount (${disc}%): -${inr(Math.round(sub * disc / 100))}` : null,
       tax > 0 ? `Tax (${tax}%): +${inr(Math.round(sub * tax / 100))}` : null,
@@ -213,12 +215,12 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
       order.payment_status !== "Paid" && bal > 0 ? `Balance due: ${inr(bal)}` : null,
       `Payment: ${order.payment_status} · ${order.payment_method}`,
       ``,
-      `📅 Ready by: ${fmtDate(order.due_date)}`,
+      `Ready by: ${fmtDate(order.due_date)}`,
       order.fulfilment === "delivery"
-        ? `🚚 We'll deliver to: ${order.address || "your address"}`
-        : `🏪 Please collect from the store.`,
+        ? `We'll deliver to: ${order.address || "your address"}`
+        : `Please collect from the store.`,
       ``,
-      `Thank you for choosing ${STORE.name}! 🙏`,
+      `Thank you for choosing ${STORE.name}!`,
     ].filter((l) => l !== null && l !== undefined).join("\n");
 
     const num = String(order.phone).replace(/\D/g, "");

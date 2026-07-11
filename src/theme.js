@@ -111,12 +111,20 @@ export const DAILY_CAPACITY = 250;
 
 // Money actually collected on an order. Fully-paid orders have collected
 // their whole total; "Partial" orders only the recorded advance; unpaid
-// orders nothing. One source of truth for every revenue calculation.
-export const collected = (o) =>
-  o.payment_status === "Paid" ? Number(o.total || 0) : Number(o.amount_paid || 0);
+// orders nothing. A cancelled order (walk-in "Cancelled" or app-order
+// "cancelled") never counts toward revenue even if it was paid online —
+// that money is owed back to the customer, not store income.
+// One source of truth for every revenue calculation.
+export const collected = (o) => {
+  const status = String(o.order_status || "").toLowerCase();
+  if (status === "cancelled") return 0;
+  return o.payment_status === "Paid" ? Number(o.total || 0) : Number(o.amount_paid || 0);
+};
 
-// What's still owed on an order (never negative).
-export const balanceDue = (o) => Math.max(0, Number(o.total || 0) - collected(o));
+// What's still owed on an order (never negative). Cancelled orders owe
+// nothing — they're void, not outstanding.
+export const balanceDue = (o) =>
+  String(o.order_status || "").toLowerCase() === "cancelled" ? 0 : Math.max(0, Number(o.total || 0) - collected(o));
 
 export const inr = (n) => "₹" + Number(n || 0).toLocaleString("en-IN");
 

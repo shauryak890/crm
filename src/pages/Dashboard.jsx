@@ -21,7 +21,7 @@ function inSameDay(d, ref)   { return d.getDate() === ref.getDate() && d.getMont
 function inSameMonth(d, ref) { return d.getMonth() === ref.getMonth() && d.getFullYear() === ref.getFullYear(); }
 function inSameYear(d, ref)  { return d.getFullYear() === ref.getFullYear(); }
 
-function periodStats(orders, period) {
+function periodStats(orders, period, expenses = []) {
   const now = new Date();
   const lastYear = new Date(now);
   lastYear.setFullYear(now.getFullYear() - 1);
@@ -43,7 +43,14 @@ function periodStats(orders, period) {
     if (match(d, lastYear)) { prev += collected(o); prevCount++; }
   });
   const delta = prev === 0 ? (cur > 0 ? 100 : 0) : ((cur - prev) / prev) * 100;
-  return { cur, prev, curCount, prevCount, delta, curWorth, curCollected, curOutstanding };
+
+  let curExpense = 0;
+  expenses.forEach((e) => {
+    const d = new Date(e.spent_on);
+    if (match(d, now)) curExpense += Number(e.amount || 0);
+  });
+
+  return { cur, prev, curCount, prevCount, delta, curWorth, curCollected, curOutstanding, curExpense };
 }
 
 const PERIOD_LABEL = {
@@ -97,19 +104,20 @@ function sparkData(orders, days = 8) {
   return out;
 }
 
-export default function Dashboard({ orders, go, displayName, customers = [] }) {
+export default function Dashboard({ orders, expenses = [], go, displayName, customers = [] }) {
   const [period, setPeriod] = useState("month"); // 'day' | 'month' | 'year'
   const pt = paymentTotals(orders);
-  const year = buildYearData(orders, []);
+  const year = buildYearData(orders, expenses);
   const delta = useMemo(() => deltaForMonth(orders), [orders]);
   const spark = useMemo(() => sparkData(orders), [orders]);
   const todayOrders = orders.filter((o) => isToday(o.created_at));
   const todayPaidTotal = todayOrders.reduce((a, o) => a + collected(o), 0);
   const unpaidTotal = orders.reduce((a, o) => a + balanceDue(o), 0);
 
-  const stats = useMemo(() => periodStats(orders, period), [orders, period]);
+  const stats = useMemo(() => periodStats(orders, period, expenses), [orders, period, expenses]);
   const chartData = useMemo(() => (period === "day" ? dailySeries(orders) : year), [orders, period, year]);
   const lbl = PERIOD_LABEL[period];
+  const netProfit = stats.cur - stats.curExpense;
 
   const firstName = (displayName || "there").split(/[ @]/)[0];
   const first = firstName ? firstName.charAt(0).toUpperCase() + firstName.slice(1) : "there";
@@ -187,6 +195,12 @@ export default function Dashboard({ orders, go, displayName, customers = [] }) {
           delta={delta}
         />
         <StatCard
+          tone={netProfit >= 0 ? "green" : "amber"} icon={TrendingUp}
+          label={`Net Profit · ${lbl.now}`}
+          value={inr(netProfit)}
+          sub={`${inr(stats.cur)} income − ${inr(stats.curExpense)} expenses`}
+        />
+        <StatCard
           tone="navy" icon={ShoppingBag}
           label="Today's Orders"
           value={String(todayOrders.length).padStart(2, "0")}
@@ -257,6 +271,36 @@ export default function Dashboard({ orders, go, displayName, customers = [] }) {
               </ResponsiveContainer>
             </div>
           </div>
+        </div>
+      </Card>
+
+      {/* ───── Income vs Expense ───── */}
+      <Card hover style={{ marginBottom: 18 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
+          <div>
+            <p className="wb-eyebrow">Income vs Expense</p>
+            <h3 style={{ fontSize: 17, fontWeight: 700, color: C.navy, marginTop: 4, letterSpacing: "-.01em" }}>Monthly — {new Date().getFullYear()}</h3>
+          </div>
+          <div className="flex items-center gap-4">
+            <span className="inline-flex items-center gap-1.5" style={{ fontSize: 12, color: C.textMute, fontWeight: 600 }}>
+              <span style={{ width: 9, height: 9, borderRadius: 3, background: C.teal, display: "inline-block" }} /> Income
+            </span>
+            <span className="inline-flex items-center gap-1.5" style={{ fontSize: 12, color: C.textMute, fontWeight: 600 }}>
+              <span style={{ width: 9, height: 9, borderRadius: 3, background: C.amber, display: "inline-block" }} /> Expense
+            </span>
+          </div>
+        </div>
+        <div style={{ height: 220, marginTop: 10 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={year} margin={{ left: -12, right: 8, top: 6 }} barGap={3}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.borderSoft} vertical={false} />
+              <XAxis dataKey="m" tick={{ fontSize: 11, fill: C.textFaint }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: C.textFaint }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={{ borderRadius: 10, border: `1px solid ${C.border}`, fontSize: 12.5 }} formatter={(v) => inr(v)} cursor={{ fill: C.tealSoft }} />
+              <Bar dataKey="sales" name="Income" fill={C.teal} radius={[4, 4, 0, 0]} />
+              <Bar dataKey="exp" name="Expense" fill={C.amber} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       </Card>
 

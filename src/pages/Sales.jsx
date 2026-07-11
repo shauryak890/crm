@@ -400,7 +400,7 @@ function DeliveryDateModal({ order, onClose, onSave, onMarkNotified }) {
       `*New delivery date: ${newDate}*`,
       `Reason: ${finalReason}.`,
       ``,
-      `We sincerely apologise for the inconvenience and appreciate your patience. 🙏`,
+      `We sincerely apologise for the inconvenience and appreciate your patience.`,
       `— Team ${STORE.name}`,
     ].join("\n");
     const wa = num.length === 10 ? "91" + num : num;

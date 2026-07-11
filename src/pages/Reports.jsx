@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo, useState } from "react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell,
 } from "recharts";
@@ -6,6 +6,13 @@ import { TrendingUp, Wallet, Users, ArrowUpRight, ArrowDownRight } from "lucide-
 import { C, DISPLAY, inr, collected } from "../theme";
 import { Card, PageHead } from "../components/ui";
 import { buildYearData, topServices } from "../lib/aggregate";
+
+// Same 12-row {m, sales, exp} shape, sliced down to the current month only
+// for the "Monthly" view — the underlying data is identical either way.
+function monthSlice(year) {
+  const m = new Date().getMonth();
+  return [year[m]];
+}
 
 function Stat({ label, value, icon: Icon, sub, tone }) {
   return (
@@ -30,7 +37,9 @@ function Stat({ label, value, icon: Icon, sub, tone }) {
 }
 
 export default function Reports({ orders, expenses, customers, orderItems }) {
+  const [range, setRange] = useState("year"); // 'month' | 'year'
   const year = buildYearData(orders, expenses);
+  const chartData = useMemo(() => (range === "month" ? monthSlice(year) : year), [range, year]);
   const totalSales = orders.reduce((a, o) => a + collected(o), 0);
   const totalExp = expenses.reduce((a, e) => a + Number(e.amount), 0);
   const pie = topServices(orderItems);
@@ -45,10 +54,33 @@ export default function Reports({ orders, expenses, customers, orderItems }) {
       </div>
       <div className="grid gap-4" style={{ gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr)" }}>
         <Card>
-          <h3 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 16, color: C.navy, marginBottom: 16 }}>Sales & Expenses — {new Date().getFullYear()}</h3>
+          <div className="flex items-center justify-between flex-wrap gap-2" style={{ marginBottom: 16 }}>
+            <h3 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 16, color: C.navy }}>
+              Sales & Expenses — {range === "month" ? new Date().toLocaleDateString("en-GB", { month: "long", year: "numeric" }) : new Date().getFullYear()}
+            </h3>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5">
+                <span style={{ width: 9, height: 9, borderRadius: 3, background: C.teal, display: "inline-block" }} />
+                <span style={{ fontSize: 11.5, color: C.textMute, fontWeight: 600 }}>Sales</span>
+                <span style={{ width: 9, height: 9, borderRadius: 3, background: C.amber, display: "inline-block", marginLeft: 8 }} />
+                <span style={{ fontSize: 11.5, color: C.textMute, fontWeight: 600 }}>Expenses</span>
+              </div>
+              <div className="flex items-center" style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9, padding: 2 }}>
+                {[["month", "Monthly"], ["year", "Yearly"]].map(([k, label]) => (
+                  <button key={k} onClick={() => setRange(k)}
+                    style={{
+                      border: "none", cursor: "pointer", padding: "5px 11px", borderRadius: 7,
+                      fontSize: 11.5, fontWeight: 600,
+                      background: range === k ? C.navy : "transparent",
+                      color: range === k ? "#fff" : C.textMute,
+                    }}>{label}</button>
+                ))}
+              </div>
+            </div>
+          </div>
           <div style={{ height: 300 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={year} margin={{ left: -12, right: 8, top: 6 }}>
+              <AreaChart data={chartData} margin={{ left: -12, right: 8, top: 6 }}>
                 <defs>
                   <linearGradient id="rs" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor={C.teal} stopOpacity={0.3} /><stop offset="100%" stopColor={C.teal} stopOpacity={0} />
