@@ -324,11 +324,6 @@ export default function App() {
       return null;
     }
   };
-  const onDeleteCustomer = async (c) => {
-    if (!confirm(`Delete ${c.first_name} ${c.last_name}?`)) return;
-    try { await api.deleteCustomer(c.id); toast("Customer deleted"); await refresh(); }
-    catch (e) { toast("Delete failed: " + e.message); }
-  };
   const logout = async () => { await supabase.auth.signOut(); };
 
   const todaySales = orders.filter((o) => isToday(o.created_at)).reduce((a, o) => a + collected(o), 0);
@@ -431,11 +426,11 @@ export default function App() {
             onChangeDeliveryDate={onChangeDeliveryDate} onMarkDelayNotified={onMarkDelayNotified} />}
           {view === "orderstatus" && <OrderStatus orders={orders} onStatus={onStatus} />}
           {view === "delivery" && <Delivery orders={orders} />}
-          {view === "customers" && <Customers customers={customers} orders={orders} loading={loading} onAdd={onAddCustomer} onDelete={onDeleteCustomer} />}
+          {view === "customers" && <Customers customers={customers} orders={orders} loading={loading} onAdd={onAddCustomer} />}
           {view === "supplies" && <Supplies profile={profile} toast={toast} isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} />}
           {view === "subscriptions" && <Subscriptions profile={profile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} customers={customers} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} toast={toast} onRefresh={refresh} />}
           {view === "expenses" && <Expenses expenses={expenses} loading={loading} onAdd={onAddExpense} onDelete={onDeleteExpense} />}
-          {view === "reports" && <Reports orders={orders} expenses={expenses} customers={customers} orderItems={orderItems} />}
+          {view === "reports" && <Reports orders={orders} expenses={expenses} customers={customers} orderItems={orderItems} outlets={outlets} isSuperAdmin={isSuperAdmin} />}
           {view === "catalogue" && <Catalogue onRefresh={refresh} toast={toast} />}
           {view === "users" && <Users profiles={profiles} loading={loading} onRefresh={refresh} toast={toast} />}
           {view === "settings" && <Settings profile={profile} session={session} toast={toast} onRefresh={refresh} />}

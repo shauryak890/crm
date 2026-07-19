@@ -1,10 +1,10 @@
 import React, { useState } from "react";
-import { Plus, Pencil, Trash2, BookOpen } from "lucide-react";
+import { Plus, Pencil, BookOpen } from "lucide-react";
 import { C, inr } from "../theme";
 import { PageHead, Btn, Badge, DataTable, Modal, td, iconBtn, field, fieldLabel } from "../components/ui";
 import { rollupCustomer } from "../lib/api";
 
-export default function Customers({ customers, orders, loading, onAdd, onDelete }) {
+export default function Customers({ customers, orders, loading, onAdd }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ first_name: "", last_name: "", phone: "", address: "", package: "No Package" });
   const [busy, setBusy] = useState(false);
@@ -43,7 +43,6 @@ export default function Customers({ customers, orders, loading, onAdd, onDelete 
             <td style={td}>
               <div className="flex items-center gap-2">
                 <button style={iconBtn("#E8EEF2", C.navy)} title="Ledger"><BookOpen size={14} /></button>
-                <button onClick={() => onDelete(c)} style={iconBtn(C.redLt, C.red)} title="Delete"><Trash2 size={14} /></button>
               </div>
             </td>
           </tr>
