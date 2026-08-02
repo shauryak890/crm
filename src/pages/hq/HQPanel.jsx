@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Building2, Wallet, ShoppingBag, TrendingUp, Users as UsersIcon, Plus, ArrowLeft,
-  LogOut, Store, ChevronRight, MapPin, Receipt, PiggyBank, Package,
+  LogOut, Store, ChevronRight, MapPin, Receipt, PiggyBank, Package, Ban, RotateCcw,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
@@ -186,6 +186,25 @@ export default function HQPanel({ profile, onExit }) {
     setSaving(false);
   };
 
+  // Outlets are never hard-deleted — orders, customers, staff, expenses
+  // and supply orders all reference outlet_id, so removing the row would
+  // either fail on the FK or silently orphan real business history.
+  // "Deleting" an outlet deactivates it instead: it disappears from every
+  // billing-outlet picker (POS, Reorder Stock, Subscriptions, Add User)
+  // while every past record stays intact and still viewable here.
+  const toggleOutletActive = async (outlet) => {
+    const activating = outlet.active === false;
+    if (!activating && !confirm(`Deactivate ${outlet.name}? It will disappear from every "billing for outlet" picker, but its orders, customers and staff stay exactly as they are and remain visible here.`)) return;
+    try {
+      await api.updateOutlet(outlet.id, { active: activating });
+      toast(activating ? `${outlet.name} reactivated` : `${outlet.name} deactivated`);
+      setSelected((s) => (s ? { ...s, active: activating } : s));
+      await load();
+    } catch (e) {
+      toast("Could not update: " + e.message);
+    }
+  };
+
   const logout = () => supabase.auth.signOut();
 
   /* ---- Drill-down into one outlet ---- */
@@ -211,10 +230,15 @@ export default function HQPanel({ profile, onExit }) {
           style={{ background: "transparent", border: "none", color: C.tealMid, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
           <ArrowLeft size={14} /> All outlets
         </button>}>
-        <div style={{ marginBottom: 24 }}>
-          <p className="wb-eyebrow" style={{ color: "#9FB5C5" }}>{selected.code}</p>
-          <h1 style={{ fontSize: 30, fontWeight: 700, color: "#fff", letterSpacing: "-.02em", marginTop: 6 }}>{selected.name}</h1>
-          {selected.address && <p style={{ color: "#9FB5C5", fontSize: 13, marginTop: 6 }} className="inline-flex items-center gap-1"><MapPin size={13} /> {selected.address}</p>}
+        <div className="flex items-start justify-between flex-wrap gap-3" style={{ marginBottom: 24 }}>
+          <div>
+            <p className="wb-eyebrow" style={{ color: "#9FB5C5" }}>{selected.code}{selected.active === false && <span style={{ marginLeft: 8 }}><Badge tone="danger">Deactivated</Badge></span>}</p>
+            <h1 style={{ fontSize: 30, fontWeight: 700, color: "#fff", letterSpacing: "-.02em", marginTop: 6 }}>{selected.name}</h1>
+            {selected.address && <p style={{ color: "#9FB5C5", fontSize: 13, marginTop: 6 }} className="inline-flex items-center gap-1"><MapPin size={13} /> {selected.address}</p>}
+          </div>
+          <Btn variant="ghost" icon={selected.active === false ? RotateCcw : Ban} onClick={() => toggleOutletActive(selected)}>
+            {selected.active === false ? "Reactivate outlet" : "Deactivate outlet"}
+          </Btn>
         </div>
 
         {/* KPI strip */}

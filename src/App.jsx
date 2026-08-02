@@ -432,7 +432,7 @@ export default function App() {
           {view === "expenses" && <Expenses expenses={expenses} loading={loading} onAdd={onAddExpense} onDelete={onDeleteExpense} />}
           {view === "reports" && <Reports orders={orders} expenses={expenses} customers={customers} orderItems={orderItems} outlets={outlets} isSuperAdmin={isSuperAdmin} />}
           {view === "catalogue" && <Catalogue onRefresh={refresh} toast={toast} />}
-          {view === "users" && <Users profiles={profiles} loading={loading} onRefresh={refresh} toast={toast} />}
+          {view === "users" && <Users profiles={profiles} loading={loading} onRefresh={refresh} toast={toast} outlets={outlets} isSuperAdmin={isSuperAdmin} currentOutletId={profile?.outlet_id} />}
           {view === "settings" && <Settings profile={profile} session={session} toast={toast} onRefresh={refresh} />}
           {view === "apporders" && <AppOrders toast={toast} />}
           {view === "tracking" && <LiveTracking toast={toast} />}

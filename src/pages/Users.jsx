@@ -13,9 +13,9 @@ function makeSignupClient() {
   });
 }
 
-export default function Users({ profiles, loading, onRefresh, toast }) {
+export default function Users({ profiles, loading, onRefresh, toast, outlets = [], isSuperAdmin = false, currentOutletId }) {
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", email: "", password: "", role: "staff" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", role: "staff", outlet_id: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -29,10 +29,15 @@ export default function Users({ profiles, loading, onRefresh, toast }) {
   const save = async () => {
     setErr("");
     if (!form.email.trim() || form.password.length < 6) { setErr("Email and a 6+ char password are required."); return; }
+    // A super_admin has no home outlet of their own, so they must say
+    // which outlet the new login belongs to — otherwise it lands wherever
+    // the DB's signup default points, which is rarely the right store.
+    if (isSuperAdmin && !form.outlet_id) { setErr("Pick which outlet this login belongs to."); return; }
     setBusy(true);
     const tmp = makeSignupClient();
-    // Note: only `name` is passed via signup metadata. Role is set by an
-    // RLS-checked UPDATE below so non-admins cannot self-promote.
+    // Note: only `name` is passed via signup metadata. Role/outlet are set
+    // by an RLS-checked UPDATE below so non-admins cannot self-promote or
+    // reassign themselves to another store.
     const { data, error } = await tmp.auth.signUp({
       email: form.email,
       password: form.password,
@@ -40,17 +45,24 @@ export default function Users({ profiles, loading, onRefresh, toast }) {
     });
     if (error) { setBusy(false); setErr(error.message); return; }
 
-    if (form.role === "admin" && data?.user?.id) {
+    // A regular admin's new hire always belongs to the admin's own outlet;
+    // a super_admin explicitly picks it. Either way, stamp it now so the
+    // account never relies on the DB's fixed signup-time default outlet.
+    const targetOutletId = isSuperAdmin ? form.outlet_id : currentOutletId;
+    const patch = {};
+    if (form.role === "admin") patch.role = "admin";
+    if (targetOutletId) patch.outlet_id = targetOutletId;
+    if (Object.keys(patch).length > 0 && data?.user?.id) {
       const { error: upErr } = await supabase
         .from("profiles")
-        .update({ role: "admin" })
+        .update(patch)
         .eq("id", data.user.id);
-      if (upErr) { setBusy(false); setErr("Account created, but role upgrade failed: " + upErr.message); return; }
+      if (upErr) { setBusy(false); setErr("Account created, but setup failed: " + upErr.message); return; }
     }
 
     setBusy(false);
     setOpen(false);
-    setForm({ name: "", email: "", password: "", role: "staff" });
+    setForm({ name: "", email: "", password: "", role: "staff", outlet_id: "" });
     toast("Staff login created. They may need to confirm via email.");
     setTimeout(onRefresh, 800);
   };
@@ -93,6 +105,15 @@ export default function Users({ profiles, loading, onRefresh, toast }) {
               </select>
             </div>
           </div>
+          {isSuperAdmin && (
+            <div style={{ marginTop: 14 }}>
+              <label style={fieldLabel}>Outlet *</label>
+              <select style={field} value={form.outlet_id} onChange={(e) => setForm({ ...form, outlet_id: e.target.value })}>
+                <option value="">— Select outlet —</option>
+                {outlets.filter((o) => o.active !== false).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </select>
+            </div>
+          )}
           {err && <div style={{ background: C.redLt, color: C.red, fontSize: 12.5, fontWeight: 600, padding: "9px 12px", borderRadius: 9, marginTop: 14 }}>{err}</div>}
           <div className="flex items-center gap-2" style={{ marginTop: 16, color: C.textFaint, fontSize: 11.5 }}>
             <ShieldCheck size={14} /> The new account follows your Supabase email-confirmation setting.
