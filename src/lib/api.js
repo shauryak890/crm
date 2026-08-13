@@ -62,8 +62,14 @@ export async function fetchProfiles() {
 /* Customer-paid totals are derived from orders, not stored, so they
    always reconcile with real invoices. */
 export function rollupCustomer(cust, orders) {
+  // Match by customer_id first — the reliable link. Only fall back to a
+  // name match for legacy orders that have NO customer_id at all (never
+  // as an OR against an already-linked order), otherwise two different
+  // customers who happen to share a name end up merged into each
+  // other's totals/outstanding balance.
   const mine = orders.filter(
-    (o) => o.customer_id === cust.id || o.customer_name === `${cust.first_name} ${cust.last_name}`.trim()
+    (o) => o.customer_id === cust.id
+      || (!o.customer_id && o.customer_name === `${cust.first_name} ${cust.last_name}`.trim())
   );
   const total = mine.reduce((a, o) => a + Number(o.total), 0);
   const paid = mine.reduce((a, o) => a + collected(o), 0);

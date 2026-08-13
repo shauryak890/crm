@@ -95,7 +95,13 @@ export default function AppOrders({ toast }) {
       }
     }
     setOrders((p) => p.map((o) => (o.id === id ? { ...o, order_status: status } : o)));
-    try { await api.updateOrderStatus(id, status); }
+    try {
+      if (status === "delivered") {
+        await api.updateOrderFields(id, { order_status: status, delivered_at: new Date().toISOString() });
+      } else {
+        await api.updateOrderStatus(id, status);
+      }
+    }
     catch (e) { toast && toast("Update failed: " + e.message); load(); }
   }, [toast, load, orders]);
 

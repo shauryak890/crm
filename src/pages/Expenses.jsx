@@ -1,14 +1,14 @@
 import React, { useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus } from "lucide-react";
 import { C, inr } from "../theme";
-import { PageHead, Btn, Badge, DataTable, Modal, td, iconBtn, field, fieldLabel } from "../components/ui";
+import { PageHead, Btn, Badge, DataTable, Modal, td, field, fieldLabel } from "../components/ui";
 
 // Supply purchases (chemicals/packaging) now go through Reorder Stock —
 // this page is scoped to the other running costs of an outlet.
 const CATS = ["Rent", "Salary", "Utilities", "Maintenance", "General"];
 const blankForm = () => ({ title: "", category: "Rent", amount: "", spent_on: new Date().toISOString().slice(0, 10) });
 
-export default function Expenses({ expenses, loading, onAdd, onDelete }) {
+export default function Expenses({ expenses, loading, onAdd }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(blankForm);
   const [busy, setBusy] = useState(false);
@@ -31,7 +31,7 @@ export default function Expenses({ expenses, loading, onAdd, onDelete }) {
       </PageHead>
       <DataTable
         loading={loading}
-        columns={["Date", "Num", "Title", "Category", "Amount", "Action"]}
+        columns={["Date", "Num", "Title", "Category", "Amount"]}
         data={expenses}
         searchKeys={["title", "category", "expense_no"]}
         placeholder="Search : num, title…"
@@ -42,9 +42,6 @@ export default function Expenses({ expenses, loading, onAdd, onDelete }) {
             <td style={{ ...td, fontWeight: 600 }}>{e.title}</td>
             <td style={td}><Badge tone="navy">{e.category}</Badge></td>
             <td style={{ ...td, fontWeight: 800 }}>{inr(e.amount)}</td>
-            <td style={td}>
-              <button onClick={() => onDelete(e)} style={iconBtn(C.redLt, C.red)}><Trash2 size={14} /></button>
-            </td>
           </tr>
         )}
       />

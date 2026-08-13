@@ -3,6 +3,7 @@ import { STORE, collected, inr } from "../theme";
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 const fmtDateTime = (s) => s ? new Date(s).toLocaleDateString("en-GB") : "—";
+const fmtWhen = (s) => s ? new Date(s).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
 // Inclusive [from, to] filter on a date string / timestamptz column.
 function inRange(iso, from, to) {
@@ -31,6 +32,8 @@ export function buildReportData({ orders, expenses, outlets = [], from, to, isSu
       payment_method: o.payment_method,
       total: Number(o.total) || 0,
       collected: collected(o),
+      paid_at: fmtWhen(o.paid_at),
+      delivered_at: fmtWhen(o.delivered_at),
     }));
 
   const expenseRows = expenses
@@ -129,15 +132,15 @@ export function downloadReportPdf(data) {
     <h2>Sales (${salesRows.length})</h2>
     <table>
       <thead><tr>
-        <th>Date</th><th>Order #</th>${isSuperAdmin ? "<th>Outlet</th>" : ""}<th>Customer</th><th>Items</th><th>Payment</th><th class="r">Total</th><th class="r">Collected</th>
+        <th>Date</th><th>Order #</th>${isSuperAdmin ? "<th>Outlet</th>" : ""}<th>Customer</th><th>Items</th><th>Payment</th><th class="r">Total</th><th class="r">Collected</th><th>Paid At</th><th>Delivered At</th>
       </tr></thead>
       <tbody>${salesRows.length ? salesRows.map((r) => `
         <tr>
           <td>${esc(r.date)}</td><td>#${r.order_no}</td>${isSuperAdmin ? `<td>${esc(r.outlet)}</td>` : ""}
           <td>${esc(r.customer)}</td><td>${esc(r.items)}</td><td>${esc(r.payment_status)} · ${esc(r.payment_method)}</td>
-          <td class="r">${inr(r.total)}</td><td class="r">${inr(r.collected)}</td>
+          <td class="r">${inr(r.total)}</td><td class="r">${inr(r.collected)}</td><td>${esc(r.paid_at)}</td><td>${esc(r.delivered_at)}</td>
         </tr>
-      `).join("") : `<tr><td colspan="${isSuperAdmin ? 8 : 7}" style="text-align:center;color:#A9BBC7;padding:16px;">No sales in this range.</td></tr>`}</tbody>
+      `).join("") : `<tr><td colspan="${isSuperAdmin ? 10 : 9}" style="text-align:center;color:#A9BBC7;padding:16px;">No sales in this range.</td></tr>`}</tbody>
     </table>`;
 
   const expenseHtml = `
@@ -192,14 +195,14 @@ export function downloadReportExcel(data) {
   }
 
   const salesHeader = isSuperAdmin
-    ? ["Date", "Order #", "Outlet", "Customer", "Items", "Payment Status", "Payment Method", "Total", "Collected"]
-    : ["Date", "Order #", "Customer", "Items", "Payment Status", "Payment Method", "Total", "Collected"];
+    ? ["Date", "Order #", "Outlet", "Customer", "Items", "Payment Status", "Payment Method", "Total", "Collected", "Paid At", "Delivered At"]
+    : ["Date", "Order #", "Customer", "Items", "Payment Status", "Payment Method", "Total", "Collected", "Paid At", "Delivered At"];
   lines.push("");
   lines.push(csvRow(["Sales"]));
   lines.push(csvRow(salesHeader));
   salesRows.forEach((r) => lines.push(csvRow(isSuperAdmin
-    ? [r.date, r.order_no, r.outlet, r.customer, r.items, r.payment_status, r.payment_method, r.total, r.collected]
-    : [r.date, r.order_no, r.customer, r.items, r.payment_status, r.payment_method, r.total, r.collected])));
+    ? [r.date, r.order_no, r.outlet, r.customer, r.items, r.payment_status, r.payment_method, r.total, r.collected, r.paid_at, r.delivered_at]
+    : [r.date, r.order_no, r.customer, r.items, r.payment_status, r.payment_method, r.total, r.collected, r.paid_at, r.delivered_at])));
 
   const expHeader = isSuperAdmin ? ["Date", "Title", "Outlet", "Category", "Amount"] : ["Date", "Title", "Category", "Amount"];
   lines.push("");

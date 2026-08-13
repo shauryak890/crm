@@ -222,6 +222,7 @@ export default function App() {
           order_status: status,
           damage_note: null,
           image_urls: [],
+          delivered_at: new Date().toISOString(),
         });
         await refresh();
       } else {
@@ -234,11 +235,13 @@ export default function App() {
   };
   const onTogglePaid = async (o) => {
     // Cycle to fully Paid, or back to Unpaid. Keep amount_paid in step so
-    // revenue figures (which read collected money) stay accurate.
+    // revenue figures (which read collected money) stay accurate. Stamp
+    // paid_at only going Unpaid → Paid; clear it if reverted.
     const next = o.payment_status === "Paid" ? "Unpaid" : "Paid";
     const amount_paid = next === "Paid" ? Number(o.total) : 0;
-    setOrders((p) => p.map((x) => (x.id === o.id ? { ...x, payment_status: next, amount_paid } : x)));
-    try { await api.updateOrderFields(o.id, { payment_status: next, amount_paid }); } catch (e) { toast("Update failed: " + e.message); refresh(); }
+    const paid_at = next === "Paid" ? new Date().toISOString() : null;
+    setOrders((p) => p.map((x) => (x.id === o.id ? { ...x, payment_status: next, amount_paid, paid_at } : x)));
+    try { await api.updateOrderFields(o.id, { payment_status: next, amount_paid, paid_at }); } catch (e) { toast("Update failed: " + e.message); refresh(); }
   };
   // who is making the edit — stamped into the audit trail
   const editor = { id: profile?.id || session.user.id, name: profile?.name || session.user.email };
@@ -291,11 +294,6 @@ export default function App() {
   const onAddExpense = async (e) => {
     try { await api.createExpense(e); toast("Expense added"); await refresh(); return true; }
     catch (err) { toast("Could not add: " + err.message); return false; }
-  };
-  const onDeleteExpense = async (e) => {
-    if (!confirm(`Delete ${e.title}?`)) return;
-    try { await api.deleteExpense(e.id); toast("Expense deleted"); await refresh(); }
-    catch (err) { toast("Delete failed: " + err.message); }
   };
   // Deduct kg from a customer's active subscription after a POS sale bills
   // against it. Called with the subscription row + the kg consumed by
@@ -429,7 +427,7 @@ export default function App() {
           {view === "customers" && <Customers customers={customers} orders={orders} loading={loading} onAdd={onAddCustomer} />}
           {view === "supplies" && <Supplies profile={profile} toast={toast} isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} />}
           {view === "subscriptions" && <Subscriptions profile={profile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} customers={customers} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} toast={toast} onRefresh={refresh} />}
-          {view === "expenses" && <Expenses expenses={expenses} loading={loading} onAdd={onAddExpense} onDelete={onDeleteExpense} />}
+          {view === "expenses" && <Expenses expenses={expenses} loading={loading} onAdd={onAddExpense} />}
           {view === "reports" && <Reports orders={orders} expenses={expenses} customers={customers} orderItems={orderItems} outlets={outlets} isSuperAdmin={isSuperAdmin} />}
           {view === "catalogue" && <Catalogue onRefresh={refresh} toast={toast} />}
           {view === "users" && <Users profiles={profiles} loading={loading} onRefresh={refresh} toast={toast} outlets={outlets} isSuperAdmin={isSuperAdmin} currentOutletId={profile?.outlet_id} />}
