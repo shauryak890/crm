@@ -120,7 +120,7 @@ function printTags({ order, customer, units, size }) {
   printDoc({ head: css, body: `<div class="sheet">${tagHtml}</div>`, title: `Tags · #${order.order_no}` });
 }
 
-export default function Invoice({ order, customers = [], orders = [], onClose, initialMode = "invoice" }) {
+export default function Invoice({ order, customers = [], orders = [], subscriptions = [], onClose, initialMode = "invoice" }) {
   const [mode, setMode] = useState(initialMode); // 'invoice' | 'tags'
   const [tagSize, setTagSize] = useState("thermal"); // 'thermal' | 'sheet'
   const [items, setItems] = useState([]);
@@ -144,6 +144,18 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
   })();
   const paidNow = collected(order);
   const balance = Number(order.total) - paidNow;
+
+  // This order drew from a subscription if it has a recorded discount.
+  // Show the customer's CURRENT subscription (only one can be active at
+  // a time) so the balance displayed is always their real live balance,
+  // not a frozen snapshot from when this order was billed.
+  const activeSubscription = customer
+    ? subscriptions.find((s) => s.customer_id === customer.id && s.status === "active") || null
+    : null;
+  const showSubscription = Number(order.subscription_discount) > 0 && !!activeSubscription;
+  const subRemainingKg = activeSubscription
+    ? Math.max(0, Number(activeSubscription.weight_limit_kg) - Number(activeSubscription.weight_used_kg))
+    : 0;
 
   // One physical tag PER garment, for every item type — so a 10-piece
   // order prints 10 stickers, one to stick on each cloth.
@@ -218,6 +230,10 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
       `*Total: ${inr(order.total)}*`,
       order.payment_status !== "Paid" && bal > 0 ? `Balance due: ${inr(bal)}` : null,
       `Payment: ${order.payment_status} · ${order.payment_method}`,
+      showSubscription ? `` : null,
+      showSubscription ? `*${activeSubscription.plan_name} Subscription*` : null,
+      showSubscription ? `Remaining balance: ${subRemainingKg.toFixed(1)} / ${Number(activeSubscription.weight_limit_kg).toFixed(1)} kg` : null,
+      showSubscription ? `Valid until: ${fmtDate(activeSubscription.expires_at)}` : null,
       ``,
       `Ready by: ${fmtDate(order.due_date)}`,
       order.fulfilment === "delivery"
@@ -264,7 +280,8 @@ export default function Invoice({ order, customers = [], orders = [], onClose, i
         <div className="wb-print-area" style={{ padding: 22, overflowY: "auto" }}>
           {mode === "invoice" ? (
             <InvoiceBody order={order} items={items} loading={loading}
-              prevAmount={prevAmount} paidNow={paidNow} balance={balance} />
+              prevAmount={prevAmount} paidNow={paidNow} balance={balance}
+              activeSubscription={showSubscription ? activeSubscription : null} subRemainingKg={subRemainingKg} />
           ) : (
             <TagsBody order={order} units={tagUnits} customer={customer} loading={loading} size={tagSize} />
           )}
@@ -300,7 +317,7 @@ const segStyle = (active) => ({
 });
 
 /* ---------------- Invoice body ---------------- */
-function InvoiceBody({ order, items, loading, prevAmount, paidNow, balance }) {
+function InvoiceBody({ order, items, loading, prevAmount, paidNow, balance, activeSubscription, subRemainingKg }) {
   return (
     <div style={{ color: "#000" }}>
       <div className="flex flex-col items-center" style={{ marginBottom: 16 }}>
@@ -353,10 +370,50 @@ function InvoiceBody({ order, items, loading, prevAmount, paidNow, balance }) {
         </tbody>
       </table>
 
+      {activeSubscription && (
+        <div style={{
+          background: "linear-gradient(135deg, #F2F9F5 0%, #EAF7F0 100%)",
+          border: `1px solid ${C.greenLt}`, borderRadius: 10, padding: "12px 14px", marginBottom: 14,
+        }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+            <span style={{ fontWeight: 800, fontSize: 13, color: C.green, letterSpacing: ".01em" }}>
+              ✓ {activeSubscription.plan_name} Subscription
+            </span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: "#fff", padding: "2px 9px", borderRadius: 99, border: `1px solid ${C.greenLt}` }}>ACTIVE</span>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <tbody>
+              <tr>
+                <td style={{ padding: "3px 0", color: "#3E6B58" }}>This order billed against plan</td>
+                <td style={{ padding: "3px 0", textAlign: "right", fontWeight: 700, color: C.green }}>−{inr(order.subscription_discount)}</td>
+              </tr>
+              <tr>
+                <td style={{ padding: "3px 0", color: "#3E6B58" }}>Plan weight limit</td>
+                <td style={{ padding: "3px 0", textAlign: "right", fontWeight: 600, color: "#1F3D30" }}>{Number(activeSubscription.weight_limit_kg).toFixed(1)} kg</td>
+              </tr>
+              <tr>
+                <td style={{ padding: "3px 0", color: "#3E6B58" }}>Used so far</td>
+                <td style={{ padding: "3px 0", textAlign: "right", fontWeight: 600, color: "#1F3D30" }}>{Number(activeSubscription.weight_used_kg).toFixed(1)} kg</td>
+              </tr>
+              <tr>
+                <td style={{ padding: "4px 0 0", borderTop: `1px solid ${C.greenLt}`, fontWeight: 800, color: C.green }}>Remaining balance</td>
+                <td style={{ padding: "4px 0 0", borderTop: `1px solid ${C.greenLt}`, textAlign: "right", fontWeight: 800, color: C.green }}>{subRemainingKg.toFixed(1)} kg</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style={{ fontSize: 10.5, color: "#5C8A73", marginTop: 8 }}>
+            Valid until {fmtDate(activeSubscription.expires_at)}
+          </div>
+        </div>
+      )}
+
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 14 }}>
         <tbody>
           <Row label="Payment Status" value={<b>{order.payment_status}</b>} />
           <Row label="Payment Method" value={order.payment_method} />
+          {Number(order.subscription_discount) > 0 && (
+            <Row label="Subscription discount" value={<span style={{ color: C.green, fontWeight: 700 }}>−{inr(order.subscription_discount)}</span>} />
+          )}
           {Number(order.discount_pct) > 0 && <Row label={`Discount (${order.discount_pct}%)`} value="" />}
           {Number(order.tax_pct) > 0 && <Row label={`Tax (${order.tax_pct}%)`} value="" />}
           <Row label="Total"   value={<b>{inr(order.total)}</b>} />

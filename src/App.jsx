@@ -447,6 +447,7 @@ export default function App() {
           order={invoiceOrder}
           customers={customers}
           orders={orders}
+          subscriptions={subscriptions}
           onClose={() => setInvoiceOrder(null)}
         />
       )}
