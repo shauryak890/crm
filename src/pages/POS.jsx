@@ -10,6 +10,15 @@ import CameraCapture from "../components/CameraCapture";
 
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 
+// The real, billable weight limit once any bonus % (e.g. Elite's "5%
+// Extra Wash") is applied — the number customers actually get charged
+// against, shown here so staff sell the plan knowing the true limit.
+const effectiveKg = (p) => {
+  const base = Number(p.weight_limit_kg) || 0;
+  const bonus = Number(p.bonus_weight_pct) || 0;
+  return Math.round(base * (1 + bonus / 100) * 100) / 100;
+};
+
 // WhatsApp the customer that their subscription is now active, with the
 // plan, weight limit, and the exact start/expiry dates.
 function notifySubscriptionWhatsApp(phone, firstName, sub) {
@@ -835,7 +844,9 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
                 style={{ border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", background: "#fff", cursor: sellPlanBusy ? "default" : "pointer", textAlign: "left" }}>
                 <div>
                   <p style={{ fontWeight: 700, color: C.navy, fontSize: 13.5 }}>{p.name}</p>
-                  <p style={{ fontSize: 11.5, color: C.textMute, marginTop: 2 }}>{p.weight_limit_kg} kg · valid 30 days</p>
+                  <p style={{ fontSize: 11.5, color: C.textMute, marginTop: 2 }}>
+                    {effectiveKg(p)} kg{Number(p.bonus_weight_pct) > 0 && <span style={{ color: C.green }}> (incl. +{p.bonus_weight_pct}% bonus)</span>} · valid 30 days
+                  </p>
                 </div>
                 <span style={{ fontWeight: 800, color: C.tealDark, fontSize: 15 }}>{inr(p.price)}</span>
               </button>

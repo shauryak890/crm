@@ -39,7 +39,15 @@ function effectiveStatus(s) {
   return s.status;
 }
 
-const blankPlanForm = () => ({ name: "", price: "", weight_limit_kg: "", features: "" });
+const blankPlanForm = () => ({ name: "", price: "", weight_limit_kg: "", bonus_weight_pct: "", features: "" });
+
+// The real, billable weight limit once any bonus % is applied — the number
+// customers actually get charged against.
+const effectiveKg = (p) => {
+  const base = Number(p.weight_limit_kg) || 0;
+  const bonus = Number(p.bonus_weight_pct) || 0;
+  return Math.round(base * (1 + bonus / 100) * 100) / 100;
+};
 
 export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customers = [], outlets = [], billingOutletId, setBillingOutletId, toast, onRefresh }) {
   const [plans, setPlans] = useState([]);
@@ -84,7 +92,7 @@ export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customer
 
   /* ── Plan editor (admin only) ────────────────────────────────────── */
   const openAddPlan = () => { setPlanForm(blankPlanForm()); setPlanModal({}); };
-  const openEditPlan = (p) => { setPlanForm({ name: p.name, price: p.price, weight_limit_kg: p.weight_limit_kg, features: (p.features || []).join(", ") }); setPlanModal(p); };
+  const openEditPlan = (p) => { setPlanForm({ name: p.name, price: p.price, weight_limit_kg: p.weight_limit_kg, bonus_weight_pct: p.bonus_weight_pct || "", features: (p.features || []).join(", ") }); setPlanModal(p); };
   const savePlan = async () => {
     if (!planForm.name.trim() || !planForm.price || !planForm.weight_limit_kg || planBusy) return;
     setPlanBusy(true);
@@ -92,6 +100,7 @@ export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customer
       name: planForm.name.trim(),
       price: Number(planForm.price),
       weight_limit_kg: Number(planForm.weight_limit_kg),
+      bonus_weight_pct: Number(planForm.bonus_weight_pct) || 0,
       features: planForm.features.split(",").map((f) => f.trim()).filter(Boolean),
     };
     try {
@@ -161,7 +170,12 @@ export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customer
             )}
             <p style={{ fontSize: 15, fontWeight: 800, color: C.navy }}>{p.name}{p.active === false && <span style={{ marginLeft: 8 }}><Badge tone="muted">Retired</Badge></span>}</p>
             <p style={{ fontSize: 24, fontWeight: 800, color: C.tealDark, marginTop: 6 }}>{inr(p.price)}<span style={{ fontSize: 12, color: C.textFaint, fontWeight: 600 }}> / month</span></p>
-            <p style={{ fontSize: 12.5, color: C.textMute, marginTop: 4 }}>{p.weight_limit_kg} kg limit</p>
+            <p style={{ fontSize: 12.5, color: C.textMute, marginTop: 4 }}>
+              {p.weight_limit_kg} kg limit
+              {Number(p.bonus_weight_pct) > 0 && (
+                <span style={{ color: C.green, fontWeight: 700 }}> · +{p.bonus_weight_pct}% bonus = {effectiveKg(p)} kg</span>
+              )}
+            </p>
             {(p.features || []).length > 0 && (
               <ul style={{ marginTop: 10, paddingLeft: 0, listStyle: "none" }}>
                 {p.features.map((f, i) => (
@@ -250,6 +264,15 @@ export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customer
             <div><label style={fieldLabel}>Weight limit (kg) *</label><input style={field} type="number" min="0" value={planForm.weight_limit_kg} onChange={(e) => setPlanForm({ ...planForm, weight_limit_kg: e.target.value })} /></div>
           </div>
           <div style={{ marginTop: 14 }}>
+            <label style={fieldLabel}>Bonus weight % (optional)</label>
+            <input style={field} type="number" min="0" max="100" value={planForm.bonus_weight_pct} onChange={(e) => setPlanForm({ ...planForm, bonus_weight_pct: e.target.value })} placeholder="e.g. 5 for Elite's 5% Extra Wash" />
+            {Number(planForm.weight_limit_kg) > 0 && Number(planForm.bonus_weight_pct) > 0 && (
+              <p style={{ fontSize: 11.5, color: C.green, marginTop: 6 }}>
+                Customers actually get {effectiveKg({ weight_limit_kg: planForm.weight_limit_kg, bonus_weight_pct: planForm.bonus_weight_pct })} kg — this is the real, billable limit.
+              </p>
+            )}
+          </div>
+          <div style={{ marginTop: 14 }}>
             <label style={fieldLabel}>Features (comma separated)</label>
             <input style={field} value={planForm.features} onChange={(e) => setPlanForm({ ...planForm, features: e.target.value })} placeholder="Wash & Iron Service, Priority Delivery" />
           </div>
@@ -270,7 +293,9 @@ export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customer
                 style={{ border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", background: "#fff", cursor: sellBusy ? "default" : "pointer", textAlign: "left" }}>
                 <div>
                   <p style={{ fontWeight: 700, color: C.navy, fontSize: 13.5 }}>{p.name}</p>
-                  <p style={{ fontSize: 11.5, color: C.textMute, marginTop: 2 }}>{p.weight_limit_kg} kg · valid 30 days</p>
+                  <p style={{ fontSize: 11.5, color: C.textMute, marginTop: 2 }}>
+                    {effectiveKg(p)} kg{Number(p.bonus_weight_pct) > 0 && <span style={{ color: C.green }}> (incl. +{p.bonus_weight_pct}% bonus)</span>} · valid 30 days
+                  </p>
                 </div>
                 <span style={{ fontWeight: 800, color: C.tealDark, fontSize: 15 }}>{inr(p.price)}</span>
               </button>

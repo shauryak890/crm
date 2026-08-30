@@ -583,12 +583,19 @@ export async function fetchCustomerSubscriptions() {
 // (who has no home outlet). Blocked by a DB unique index if the customer
 // already holds an active subscription.
 export async function createCustomerSubscription({ customerId, plan, outletId }) {
+  // Bake in any bonus weight (e.g. Elite's "5% Extra Wash") once, at sale
+  // time, into the snapshotted limit — everywhere else in the app just
+  // reads weight_limit_kg off this row, so the bonus is honoured
+  // automatically at billing with no other code needing to know about it.
+  const baseKg = Number(plan.weight_limit_kg) || 0;
+  const bonusPct = Number(plan.bonus_weight_pct) || 0;
+  const effectiveKg = Math.round(baseKg * (1 + bonusPct / 100) * 100) / 100;
   const row = {
     customer_id: customerId,
     plan_id: plan.id,
     plan_name: plan.name,
     price_paid: Number(plan.price) || 0,
-    weight_limit_kg: Number(plan.weight_limit_kg) || 0,
+    weight_limit_kg: effectiveKg,
   };
   if (outletId) row.outlet_id = outletId; // super_admin path
   const { data, error } = await supabase.from("customer_subscriptions").insert(row).select().single();
