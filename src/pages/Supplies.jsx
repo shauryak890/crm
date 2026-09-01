@@ -72,7 +72,7 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
 
   return (
     <div>
-      <PageHead title="Reorder Stock" sub="Order chemicals & packaging from HQ. Your request is sent to HQ for approval & dispatch.">
+      <PageHead title="Reorder Stock" sub="Order chemicals & packaging from HQ. Your request is sent to HQ for approval & dispatch. Prices shown exclude 18% GST; transportation charges may vary and are billed separately.">
         {isSuperAdmin && (
           <select value={billingOutletId || ""} onChange={(e) => setBillingOutletId(e.target.value)}
             style={{ border: `1px solid ${C.border}`, borderRadius: 11, padding: "8px 12px", fontSize: 13, fontWeight: 600, color: C.navy, background: "#fff" }}>
@@ -157,10 +157,13 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
           <div style={{ padding: 18, borderTop: `1px solid ${C.borderSoft}`, background: C.paper }}>
             <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Note for HQ (optional) — e.g. urgent, running low on…"
               style={{ width: "100%", border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 11px", fontSize: 13, outline: "none", resize: "vertical", marginBottom: 10 }} />
-            <div className="flex items-center justify-between" style={{ marginBottom: cartLines.some((l) => !hasPrice(l)) ? 4 : 12 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
               <span style={{ fontSize: 13, color: C.textMute }}>Estimated total</span>
               <span style={{ fontSize: 18, fontWeight: 800, color: C.navy }}>{inr(cartTotal)}</span>
             </div>
+            <p style={{ fontSize: 11, color: C.textFaint, marginBottom: cartLines.some((l) => !hasPrice(l)) ? 4 : 12 }}>
+              + 18% GST on items. Transportation charges may vary and are billed separately.
+            </p>
             {cartLines.some((l) => !hasPrice(l)) && (
               <p style={{ fontSize: 11, color: C.amber, marginBottom: 12 }}>Some items are priced "N/A" — HQ will confirm their cost.</p>
             )}
