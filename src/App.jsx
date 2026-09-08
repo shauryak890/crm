@@ -151,10 +151,10 @@ export default function App() {
     try {
       const [prod, cust, ord, exp, subs, plans, profs, items, outs] = await Promise.all([
         api.fetchProducts(), api.fetchCustomers(), api.fetchOrders(),
-        api.fetchExpenses(), api.fetchCustomerSubscriptions().catch(() => []),
-        api.fetchSubscriptionPlans().catch(() => []),
+        api.fetchExpenses(), api.fetchCustomerSubscriptions().catch((e) => { console.error("fetchCustomerSubscriptions failed:", e); toast("Could not load subscriptions: " + e.message); return []; }),
+        api.fetchSubscriptionPlans().catch((e) => { console.error("fetchSubscriptionPlans failed:", e); toast("Could not load plans: " + e.message); return []; }),
         api.fetchProfiles(), api.fetchOrderItems(),
-        api.fetchOutlets().catch(() => []),
+        api.fetchOutlets().catch((e) => { console.error("fetchOutlets failed:", e); toast("Could not load outlets: " + e.message); return []; }),
       ]);
       setProducts(prod); setCustomers(cust); setOrders(ord);
       setExpenses(exp); setSubscriptions(subs); setSubscriptionPlans(plans); setProfiles(profs); setOrderItems(items); setOutlets(outs);
@@ -312,6 +312,16 @@ export default function App() {
     const outletId = isSuperAdmin ? billingOutletId : null;
     if (isSuperAdmin && !outletId) { toast("Pick the outlet this order belongs to first."); return null; }
     try {
+      // Close out a plan that's really finished (past expiry, or fully
+      // used up) but still marked 'active' in the DB — a partial unique
+      // index would otherwise reject the new sale.
+      const now = new Date();
+      const stale = subscriptions.find((s) =>
+        s.customer_id === customer.id && s.status === "active"
+        && (new Date(s.expires_at) < now || Number(s.weight_used_kg) >= Number(s.weight_limit_kg))
+      );
+      if (stale) await api.expireCustomerSubscription(stale.id);
+
       const created = await api.createCustomerSubscription({ customerId: customer.id, plan, outletId });
       toast(`${plan.name} subscription sold to ${customer.first_name}`);
       await refresh();

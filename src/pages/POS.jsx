@@ -163,10 +163,16 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
   // The matched customer's active, unexpired subscription (if any) — kg
   // billed on this order draws down its remaining balance for free until
   // it runs out, then normal per-kg pricing resumes for the rest.
+  // A plan that's fully used up counts as finished even though the DB
+  // still says 'active' (nothing auto-flips that column), so the counter
+  // offers them a new one instead of a dead plan with 0 kg left.
   const activeSubscription = useMemo(() => {
     if (!matched) return null;
     return subscriptions.find((s) =>
-      s.customer_id === matched.id && s.status === "active" && new Date(s.expires_at) >= new Date()
+      s.customer_id === matched.id
+      && s.status === "active"
+      && new Date(s.expires_at) >= new Date()
+      && Number(s.weight_used_kg) < Number(s.weight_limit_kg)
     ) || null;
   }, [matched, subscriptions]);
   const subRemainingKg = activeSubscription

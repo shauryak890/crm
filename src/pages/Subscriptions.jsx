@@ -28,15 +28,19 @@ function notifySubscriptionWhatsApp(customer, sub) {
   window.open(`https://wa.me/${wa}?text=${encodeURIComponent(lines)}`, "_blank");
 }
 
-const STATUS_TONE  = { active: "success", expired: "muted", cancelled: "danger" };
-const STATUS_LABEL = { active: "Active", expired: "Expired", cancelled: "Cancelled" };
+const STATUS_TONE  = { active: "success", expired: "muted", exhausted: "warn", cancelled: "danger" };
+const STATUS_LABEL = { active: "Active", expired: "Expired", exhausted: "Fully used", cancelled: "Cancelled" };
 
-// A subscription is only really "active" if the DB says so AND it hasn't
-// passed its 30-day expiry — the DB doesn't auto-flip the status column,
-// so the frontend treats a stale 'active' row past expires_at as expired.
+// A subscription is only really usable if the DB says 'active' AND it
+// hasn't passed its 30-day expiry AND it still has weight left. The DB
+// doesn't auto-flip the status column, so the frontend treats a stale
+// 'active' row that's past expires_at (or fully used up) as finished —
+// otherwise the customer could never buy their next plan.
 function effectiveStatus(s) {
-  if (s.status === "active" && new Date(s.expires_at) < new Date()) return "expired";
-  return s.status;
+  if (s.status !== "active") return s.status;
+  if (new Date(s.expires_at) < new Date()) return "expired";
+  if (Number(s.weight_used_kg) >= Number(s.weight_limit_kg)) return "exhausted";
+  return "active";
 }
 
 const blankPlanForm = () => ({ name: "", price: "", weight_limit_kg: "", bonus_weight_pct: "", features: "" });
@@ -126,6 +130,13 @@ export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customer
     if (isSuperAdmin && !outletId) { setErr("Pick which outlet this sale is for."); return; }
     setSellBusy(true);
     try {
+      // The DB still holds status='active' on a plan that's really expired
+      // or fully used up (nothing auto-flips it), and a partial unique
+      // index would reject the new row. Close the finished one out first.
+      const prev = subByCustomer[sellFor.id];
+      if (prev && prev.status === "active" && effectiveStatus(prev) !== "active") {
+        await api.expireCustomerSubscription(prev.id);
+      }
       const created = await api.createCustomerSubscription({ customerId: sellFor.id, plan, outletId });
       toast && toast(`${plan.name} sold to ${sellFor.first_name}`);
       if (notify) notifySubscriptionWhatsApp(sellFor, created);

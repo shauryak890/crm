@@ -618,6 +618,15 @@ export async function cancelCustomerSubscription(id) {
   if (error) throw error;
 }
 
+// Retire a subscription that's genuinely finished — past its expiry date
+// or fully used up. The DB never auto-flips `status`, and a partial unique
+// index blocks a second row while one is still marked 'active', so a
+// finished plan has to be closed out before the customer can buy again.
+export async function expireCustomerSubscription(id) {
+  const { error } = await supabase.from("customer_subscriptions").update({ status: "expired" }).eq("id", id);
+  if (error) throw error;
+}
+
 // A super_admin's normal fetchOrders/fetchCustomers/fetchExpenses/
 // fetchProfiles already return EVERY outlet's rows (RLS grants the
 // bypass), so HQ reuses those — no separate "all outlets" query needed.
