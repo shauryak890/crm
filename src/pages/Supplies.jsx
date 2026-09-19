@@ -34,12 +34,17 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
     i.name.toLowerCase().includes(search.toLowerCase())
   );
 
-  const hasPrice = (it) => it.price != null && Number(it.price) > 0;
+  // Chemicals are quoted by HQ at order time, so their rates are never
+  // shown to the outlet — only packaging carries a visible price.
+  const isChemical = (it) => String(it.category || "").toLowerCase() === "chemical";
+  const hasPrice = (it) => !isChemical(it) && it.price != null && Number(it.price) > 0;
   const setQty = (id, q) => setCart((c) => { const n = { ...c }; if (q <= 0) delete n[id]; else n[id] = q; return n; });
   const cartLines = Object.entries(cart).map(([id, qty]) => {
     const it = items.find((x) => x.id === id);
     if (!it) return null;
-    const price = Number(it.price) || 0;
+    // A chemical has no outlet-visible rate, so it contributes nothing to
+    // the estimate — HQ prices it when they confirm the order.
+    const price = hasPrice(it) ? Number(it.price) : 0;
     return { ...it, qty, line_total: Math.round(price * qty) };
   }).filter(Boolean);
   const cartTotal = cartLines.reduce((a, l) => a + l.line_total, 0);
@@ -52,7 +57,9 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
     setBusy(true);
     try {
       await api.createSupplyOrder({
-        items: cartLines.map((l) => ({ item_name: l.name, category: l.category, unit: l.unit, qty: l.qty, unit_price: l.price, line_total: l.line_total })),
+        // Chemicals go out unpriced (0) — HQ quotes them on confirmation,
+        // same as any item whose price is "N/A" in the master catalogue.
+        items: cartLines.map((l) => ({ item_name: l.name, category: l.category, unit: l.unit, qty: l.qty, unit_price: hasPrice(l) ? l.price : 0, line_total: l.line_total })),
         note,
         requester: profile?.name || profile?.email,
         outletId,
@@ -165,7 +172,11 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
               + 18% GST on items. Transportation charges may vary and are billed separately.
             </p>
             {cartLines.some((l) => !hasPrice(l)) && (
-              <p style={{ fontSize: 11, color: C.amber, marginBottom: 12 }}>Some items are priced "N/A" — HQ will confirm their cost.</p>
+              <p style={{ fontSize: 11, color: C.amber, marginBottom: 12 }}>
+                {cartLines.some((l) => isChemical(l))
+                  ? "Chemicals are quoted by HQ — their cost is confirmed when your order is approved, and isn't included in the estimate above."
+                  : 'Some items are priced "N/A" — HQ will confirm their cost.'}
+              </p>
             )}
             {err && <div style={{ background: C.redLt, color: C.red, fontSize: 12.5, fontWeight: 600, padding: "9px 12px", borderRadius: 9, marginBottom: 10 }}>{err}</div>}
             <Btn variant="primary" icon={Send} full onClick={submit} disabled={busy}>Send order to HQ</Btn>
@@ -197,7 +208,9 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span style={{ fontWeight: 800, color: C.navy, fontSize: 16 }}>{inr(o.total)}</span>
+                  <span style={{ fontWeight: 800, color: Number(o.total) > 0 ? C.navy : C.amber, fontSize: Number(o.total) > 0 ? 16 : 12.5 }}>
+                    {Number(o.total) > 0 ? inr(o.total) : "Awaiting HQ quote"}
+                  </span>
                   {o.status === "requested" && !isSuperAdmin && (
                     <Btn variant="danger" small icon={X} onClick={() => cancelOrder(o)}>Cancel</Btn>
                   )}
