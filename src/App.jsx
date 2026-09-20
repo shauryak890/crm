@@ -111,6 +111,7 @@ export default function App() {
   const [orderItems, setOrderItems] = useState([]);
   const [outlets, setOutlets] = useState([]);
   const [billingOutletId, setBillingOutletId] = useState("");  // super-admin's chosen outlet for POS
+  const [dashOutletId, setDashOutletId] = useState("");        // super-admin's Dashboard filter ("" = all outlets)
   const [loading, setLoading] = useState(true);
   const [invoiceOrder, setInvoiceOrder] = useState(null);
   const [focusMode, setFocusMode] = useState(false);
@@ -342,6 +343,14 @@ export default function App() {
   const isAdmin = profile?.role === "admin" || isSuperAdmin;
   const roleLabel = isSuperAdmin ? "Super Admin" : profile?.role === "admin" ? "Admin" : "Staff";
 
+  // A super_admin's data spans every outlet. The Dashboard lets them
+  // narrow it to one store ("" = the whole network), so the figures
+  // below are filtered before they ever reach the page — every tile and
+  // chart in it then scopes itself without needing to know about outlets.
+  const dashOrders = dashOutletId ? orders.filter((o) => o.outlet_id === dashOutletId) : orders;
+  const dashExpenses = dashOutletId ? expenses.filter((e) => e.outlet_id === dashOutletId) : expenses;
+  const dashCustomers = dashOutletId ? customers.filter((c) => c.outlet_id === dashOutletId) : customers;
+
   const visibleNav = NAV
     .map((grp) => ({ ...grp, items: grp.items.filter((it) => !it.adminOnly || isAdmin) }))
     .filter((grp) => grp.items.length > 0);
@@ -423,8 +432,9 @@ export default function App() {
           <div key={view} className="wb-enter">
           {ADMIN_VIEWS.has(view) && !isAdmin ? <AccessDenied /> : (
             <>
-          {view === "dashboard" && <Dashboard orders={orders} expenses={expenses} go={go} displayName={displayName} customers={customers} />}
-          {view === "pos" && <POS products={products} customers={customers} orders={orders} onPay={onPay} focusMode={focusMode} setFocusMode={setFocusMode} isAdmin={isAdmin} onQuickAddProduct={onQuickAddProduct}
+          {view === "dashboard" && <Dashboard orders={dashOrders} expenses={dashExpenses} go={go} displayName={displayName} customers={dashCustomers}
+            isSuperAdmin={isSuperAdmin} outlets={outlets} dashOutletId={dashOutletId} setDashOutletId={setDashOutletId} />}
+          {view === "pos" && <POS products={products} customers={customers} orders={orders} onPay={onPay} profile={profile} focusMode={focusMode} setFocusMode={setFocusMode} isAdmin={isAdmin} onQuickAddProduct={onQuickAddProduct}
             isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId}
             subscriptions={subscriptions} onUseSubscription={onUseSubscription}
             subscriptionPlans={subscriptionPlans} onSellSubscription={onSellSubscription} />}

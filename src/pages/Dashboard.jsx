@@ -104,7 +104,8 @@ function sparkData(orders, days = 8) {
   return out;
 }
 
-export default function Dashboard({ orders, expenses = [], go, displayName, customers = [] }) {
+export default function Dashboard({ orders, expenses = [], go, displayName, customers = [],
+  isSuperAdmin = false, outlets = [], dashOutletId = "", setDashOutletId }) {
   const [period, setPeriod] = useState("month"); // 'day' | 'month' | 'year'
   const pt = paymentTotals(orders);
   const year = buildYearData(orders, expenses);
@@ -135,6 +136,14 @@ export default function Dashboard({ orders, expenses = [], go, displayName, cust
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Outlet filter — HQ only. "" shows the whole network. */}
+          {isSuperAdmin && outlets.length > 0 && (
+            <select value={dashOutletId || ""} onChange={(e) => setDashOutletId && setDashOutletId(e.target.value)}
+              style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 11, padding: "8px 12px", fontSize: 12.5, fontWeight: 600, color: C.navy, cursor: "pointer" }}>
+              <option value="">All outlets</option>
+              {outlets.filter((o) => o.active !== false).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+          )}
           {/* Period toggle — drives the comparison card + chart */}
           <div className="flex items-center" style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 11, padding: 3 }}>
             {[["day", "Daily"], ["month", "Monthly"], ["year", "Yearly"]].map(([k, label]) => (

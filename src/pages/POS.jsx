@@ -61,7 +61,7 @@ const splitName = (full) => {
   return { first_name: parts[0] || "", last_name: parts.slice(1).join(" ") };
 };
 
-export default function POS({ products, customers, orders = [], onPay, focusMode, setFocusMode, isAdmin, onQuickAddProduct,
+export default function POS({ products, customers, orders = [], onPay, profile, focusMode, setFocusMode, isAdmin, onQuickAddProduct,
   isSuperAdmin, outlets = [], billingOutletId, setBillingOutletId, subscriptions = [], onUseSubscription,
   subscriptionPlans = [], onSellSubscription }) {
   const [cart, setCart] = useState([]);
@@ -373,10 +373,15 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
   // Garment count this cart adds (qty is the piece count on both piece-
   // and kg-priced lines) and how many are already booked for a given day.
   const cartPieces = cart.reduce((a, i) => a + (Number(i.qty) || 0), 0);
+  // Each outlet runs its own plant, so capacity is counted per outlet.
+  // A super_admin's `orders` holds every outlet's rows, so without this
+  // the picked billing outlet would show another store's load.
+  const capacityOutletId = isSuperAdmin ? billingOutletId : profile?.outlet_id;
   const bookedFor = (date) => orders
-    .filter((o) => o.due_date === date && o.order_status !== "Delivered")
+    .filter((o) => o.due_date === date && o.order_status !== "Delivered"
+      && (!capacityOutletId || o.outlet_id === capacityOutletId))
     .reduce((a, o) => a + (Number(o.pieces) || 0), 0);
-  const bookedToday = useMemo(() => bookedFor(dueDate), [orders, dueDate]); // eslint-disable-line react-hooks/exhaustive-deps
+  const bookedToday = useMemo(() => bookedFor(dueDate), [orders, dueDate, capacityOutletId]); // eslint-disable-line react-hooks/exhaustive-deps
   const projected = bookedToday + cartPieces;
   const overCapacity = projected > DAILY_CAPACITY;
   // Earliest day (from today out 60 days) where this cart still fits.
@@ -387,7 +392,7 @@ export default function POS({ products, customers, orders = [], onPay, focusMode
       if (bookedFor(d) + cartPieces <= DAILY_CAPACITY) return d;
     }
     return null;
-  }, [orders, cartPieces]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [orders, cartPieces, capacityOutletId]); // eslint-disable-line react-hooks/exhaustive-deps
   // Block billing only when the day is over capacity AND a free day
   // exists. A single order larger than a whole day's capacity can't be
   // helped by moving it, so we let it through with a warning.
