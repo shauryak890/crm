@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Truck, X, MapPin, Phone, Bell, ChevronRight, ShoppingBag } from "lucide-react";
-import { C } from "../theme";
+import { C, orderRef } from "../theme";
 
 const isSameDay = (s) => {
   if (!s) return false;
@@ -88,7 +88,7 @@ export default function DeliveryAlert({ orders, onJump }) {
                 </span>
               </div>
               <div className="flex items-center gap-3 flex-wrap" style={{ fontSize: 11.5, color: C.textFaint, paddingLeft: 36 }}>
-                <span style={{ fontWeight: 600, color: C.textMute }}>#{o.order_no}</span>
+                <span style={{ fontWeight: 600, color: C.textMute }}>#{orderRef(o)}</span>
                 {o.phone && <span className="inline-flex items-center gap-1"><Phone size={11} /> {o.phone}</span>}
               </div>
               {delivery && o.address && (

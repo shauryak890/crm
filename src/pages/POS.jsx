@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Search, Shirt, ShoppingCart, Trash2, Banknote, Printer, X, Plus, UserCheck, Camera, FileText, Pencil,
-  Users as UsersIcon, Maximize2, Minimize2, Image as ImageIcon, BadgePercent,
+  Users as UsersIcon, Maximize2, Minimize2, Image as ImageIcon, BadgePercent, Store,
 } from "lucide-react";
 import { C, DISPLAY, STORE, SERVICE_TYPES, PAYMENT_METHODS, DAILY_CAPACITY, inr } from "../theme";
 import * as api from "../lib/api";
@@ -421,6 +421,15 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
     const paid = Math.max(0, Math.min(Number(received) || 0, total));
     const status = paid >= total ? "Paid" : paid <= 0 ? "Unpaid" : "Partial";
 
+    // The outlet dropdown is shared session state (POS, Subscriptions,
+    // Reorder Stock) and survives navigation, so a value set elsewhere
+    // can silently follow you here and misfile the order. Make a
+    // super_admin confirm the destination before money is taken.
+    if (isSuperAdmin && billingOutletId) {
+      const outletName = outlets.find((o) => o.id === billingOutletId)?.name || "the selected outlet";
+      if (!confirm(`Bill this ${inr(total)} order to ${outletName}?\n\nThe order will be recorded against that outlet.`)) return;
+    }
+
     setBusy(true);
     try {
       // For a super-admin the row's outlet_id can't come from the DB
@@ -576,6 +585,17 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
                     <option key={o.id} value={o.id}>{o.name}</option>
                   ))}
                 </select>
+              </div>
+            )}
+            {/* Regular staff can't change outlet, but they must be able to
+                SEE which one they're billing into — billing from the wrong
+                outlet's login silently misfiles the order. */}
+            {!isSuperAdmin && profile?.outlet && (
+              <div className="flex items-center gap-2" style={{ background: C.tealLight, borderRadius: 10, padding: "8px 12px" }}>
+                <Store size={14} color={C.tealDark} />
+                <span style={{ fontSize: 12, fontWeight: 700, color: C.tealDark }}>
+                  Billing to {profile.outlet}
+                </span>
               </div>
             )}
             <div className="flex items-center justify-between" style={{ marginBottom: -4 }}>

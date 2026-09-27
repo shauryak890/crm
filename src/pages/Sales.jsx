@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Printer, FileText, Pencil, CalendarClock, History, X, MessageCircle } from "lucide-react";
-import { C, KANBAN, APP_LIFECYCLE, APP_LIFECYCLE_LABEL, PAYMENT_METHODS, DELAY_REASONS, STORE, inr, balanceDue } from "../theme";
+import { C, KANBAN, APP_LIFECYCLE, APP_LIFECYCLE_LABEL, PAYMENT_METHODS, DELAY_REASONS, STORE, inr, balanceDue, orderRef } from "../theme";
 import { PageHead, Btn, Badge, DataTable, Modal, td, iconBtn, field, fieldLabel } from "../components/ui";
 import * as api from "../lib/api";
 
@@ -24,12 +24,12 @@ export default function Sales({
         loading={loading}
         columns={["Num", "Date", "Client", "Due", "Total", "Status", "Delivery", "Method", "Order Status", ""]}
         data={orders}
-        searchKeys={["customer_name", "order_no", "payment_method", "phone"]}
+        searchKeys={["customer_name", orderRef, "payment_method", "phone"]}
         placeholder="Search by client / num / phone…"
         renderRow={(o) => (
           <tr key={o.id}>
             <td style={{ ...td, fontWeight: 800, color: C.navy }}>
-              #{o.order_no}
+              #{orderRef(o)}
               {o.edited_at && (
                 <span title={editTitle(o)} className="inline-flex items-center gap-1"
                   style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, color: C.amber, background: C.amberLt, padding: "2px 6px", borderRadius: 99, cursor: "help", verticalAlign: "middle" }}>
@@ -216,7 +216,7 @@ function EditSaleModal({ order, products, onClose, onSave, onQuickAddProduct }) 
   };
 
   return (
-    <Modal title={`Edit Order #${order.order_no}`} sub="Add-only — you can add items or increase quantities, not reduce them. Every change is logged." onClose={onClose} width={620}>
+    <Modal title={`Edit Order #${orderRef(order)}`} sub="Add-only — you can add items or increase quantities, not reduce them. Every change is logged." onClose={onClose} width={620}>
       <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <div><label style={fieldLabel}>Customer *</label><input style={field} value={form.customer_name} onChange={(e) => setForm({ ...form, customer_name: e.target.value })} /></div>
         <div><label style={fieldLabel}>Phone</label><input style={field} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
@@ -396,7 +396,7 @@ function DeliveryDateModal({ order, onClose, onSave, onMarkNotified }) {
       `*${STORE.name}*`,
       `Dear ${order.customer_name},`,
       ``,
-      `We're sorry — your order *#${order.order_no}* will be ready a little later than planned.`,
+      `We're sorry — your order *#${orderRef(order)}* will be ready a little later than planned.`,
       `*New delivery date: ${newDate}*`,
       `Reason: ${finalReason}.`,
       ``,
@@ -409,7 +409,7 @@ function DeliveryDateModal({ order, onClose, onSave, onMarkNotified }) {
   };
 
   return (
-    <Modal title={`Change delivery date · #${order.order_no}`} sub={`Current: ${fmt(order.due_date)}`} onClose={onClose} width={440}>
+    <Modal title={`Change delivery date · #${orderRef(order)}`} sub={`Current: ${fmt(order.due_date)}`} onClose={onClose} width={440}>
       <div><label style={fieldLabel}>New delivery date *</label>
         <input style={field} type="date" value={date || ""} onChange={(e) => setDate(e.target.value)} />
       </div>

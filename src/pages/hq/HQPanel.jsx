@@ -7,7 +7,7 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
   AreaChart, Area, PieChart, Pie,
 } from "recharts";
-import { C, inr, collected, balanceDue } from "../../theme";
+import { C, inr, collected, balanceDue, orderRef } from "../../theme";
 import { supabase } from "../../lib/supabase";
 import * as api from "../../lib/api";
 import { Logo, Card, Btn, Badge, IconCircle, Modal, field, fieldLabel } from "../../components/ui";
@@ -342,7 +342,7 @@ export default function HQPanel({ profile, onExit }) {
               ) : outletOrders.slice(0, 12).map((o) => (
                 <div key={o.id} className="flex items-center justify-between" style={{ padding: "12px 20px", borderTop: `1px solid ${C.borderSoft}` }}>
                   <div>
-                    <p style={{ fontWeight: 600, fontSize: 13.5, color: C.navy }}>#{o.order_no} · {o.customer_name}</p>
+                    <p style={{ fontWeight: 600, fontSize: 13.5, color: C.navy }}>#{orderRef(o)} · {o.customer_name}</p>
                     <p style={{ fontSize: 11.5, color: C.textFaint, marginTop: 2 }}>{new Date(o.created_at).toLocaleDateString("en-GB")} · {o.payment_method}</p>
                   </div>
                   <div style={{ textAlign: "right" }}>
@@ -441,7 +441,7 @@ export default function HQPanel({ profile, onExit }) {
                       </tr>
                       {open && c.orders.map((o) => (
                         <tr key={o.id} style={{ background: C.bg }}>
-                          <td style={{ ...tD, paddingLeft: 64, fontSize: 12.5, color: C.navy }}>#{o.order_no} · {String(o.order_status || "").replace(/_/g, " ")}</td>
+                          <td style={{ ...tD, paddingLeft: 64, fontSize: 12.5, color: C.navy }}>#{orderRef(o)} · {String(o.order_status || "").replace(/_/g, " ")}</td>
                           <td style={{ ...tD, fontSize: 12.5, color: C.textMute }} colSpan={2}>{o.address || "—"}</td>
                           <td style={{ ...tD, textAlign: "right", fontWeight: 600, color: C.navy, fontSize: 12.5 }}>{inr(o.total)}</td>
                           <td style={{ ...tD, textAlign: "right", color: C.textMute, fontSize: 12 }} colSpan={2}>{new Date(o.created_at).toLocaleDateString("en-GB")}</td>

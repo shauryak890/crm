@@ -5,7 +5,7 @@ import {
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, AreaChart, Area,
 } from "recharts";
-import { C, inr, collected, balanceDue } from "../theme";
+import { C, inr, collected, balanceDue, orderRef } from "../theme";
 import { Card, Btn, Badge, IconCircle, Trend } from "../components/ui";
 import { paymentTotals, buildYearData, isToday } from "../lib/aggregate";
 
@@ -346,7 +346,7 @@ export default function Dashboard({ orders, expenses = [], go, displayName, cust
                       <IconCircle icon={ShoppingBag} tone={o.fulfilment === "delivery" ? "navy" : "teal"} size={34} />
                       <div>
                         <p style={{ fontWeight: 600, fontSize: 13.5, color: C.navy }}>{o.customer_name}</p>
-                        <p style={{ fontSize: 11.5, color: C.textFaint, marginTop: 2 }}>#{o.order_no} · {o.fulfilment === "delivery" ? "Delivery" : "Pickup"}</p>
+                        <p style={{ fontSize: 11.5, color: C.textFaint, marginTop: 2 }}>#{orderRef(o)} · {o.fulfilment === "delivery" ? "Delivery" : "Pickup"}</p>
                       </div>
                     </div>
                   </td>

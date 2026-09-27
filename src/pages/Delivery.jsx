@@ -1,6 +1,6 @@
 import React from "react";
 import { Package, Download, MapPin, Phone, Calendar } from "lucide-react";
-import { C, DISPLAY } from "../theme";
+import { C, DISPLAY, orderRef } from "../theme";
 import { Card, PageHead, Btn, Badge } from "../components/ui";
 
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) : "—";
@@ -22,7 +22,7 @@ function Col({ title, items, empty, action }) {
           <div key={o.id} className="rounded-xl" style={{ padding: "14px 16px", background: "#F7FAFB", border: `1px solid ${C.borderSoft}` }}>
             <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
               <p style={{ fontWeight: 700, color: C.navy, fontSize: 14 }}>{o.customer_name}</p>
-              <Badge tone="info">#{o.order_no}</Badge>
+              <Badge tone="info">#{orderRef(o)}</Badge>
             </div>
             <div className="flex items-center gap-3 flex-wrap" style={{ fontSize: 12, color: C.textMute }}>
               <span className="flex items-center gap-1"><Calendar size={12} /> {fmtDate(o.due_date)}</span>

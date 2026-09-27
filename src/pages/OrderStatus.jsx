@@ -1,10 +1,11 @@
 import React, { useState } from "react";
 import { ScanLine, Shirt, Smartphone } from "lucide-react";
-import { C, DISPLAY, KANBAN, APP_LIFECYCLE, APP_LIFECYCLE_LABEL } from "../theme";
+import { C, DISPLAY, KANBAN, APP_LIFECYCLE, APP_LIFECYCLE_LABEL, orderRef, findOrdersByRef } from "../theme";
 import { Card, PageHead, Badge } from "../components/ui";
 
 export default function OrderStatus({ orders, onStatus }) {
   const [scan, setScan] = useState("");
+  const [scanMsg, setScanMsg] = useState(null); // { tone, text } after each scan
 
   // App orders (channel='app') use the app lifecycle vocabulary so outlet
   // status changes flow live to the customer + driver apps. Walk-in/CRM
@@ -14,14 +15,19 @@ export default function OrderStatus({ orders, onStatus }) {
 
   const onScan = (e) => {
     if (e.key !== "Enter" || !scan.trim()) return;
-    const num = scan.replace(/[^0-9]/g, "");
-    const match = orders.find((o) => String(o.order_no) === num);
-    if (match) {
+    const matches = findOrdersByRef(orders, scan);
+    if (matches.length === 1) {
+      const match = matches[0];
       // Advance one stage along whichever lifecycle this order belongs to.
       const flow = match.channel === "app" ? APP_LIFECYCLE : KANBAN;
       const idx = flow.indexOf(match.order_status);
       const next = idx >= 0 ? flow[Math.min(idx + 1, flow.length - 1)] : flow[0];
       onStatus(match.id, next);
+      setScanMsg({ tone: "success", text: `#${orderRef(match)} → ${next}` });
+    } else if (matches.length > 1) {
+      setScanMsg({ tone: "warn", text: `${scan.trim()} exists at more than one outlet — scan the barcode or type the full number, e.g. ${orderRef(matches[0])}.` });
+    } else {
+      setScanMsg({ tone: "danger", text: `No order found for "${scan.trim()}".` });
     }
     setScan("");
   };
@@ -37,6 +43,12 @@ export default function OrderStatus({ orders, onStatus }) {
             placeholder="Scan or type order # then press Enter — advances it one stage…"
             style={{ flex: 1, border: `1px solid ${C.border}`, borderRadius: 12, padding: "11px 14px", fontSize: 13.5, outline: "none" }} />
         </div>
+        {scanMsg && (
+          <p style={{ marginTop: 10, fontSize: 12.5, fontWeight: 600,
+            color: scanMsg.tone === "success" ? C.green : scanMsg.tone === "warn" ? C.amber : C.red }}>
+            {scanMsg.text}
+          </p>
+        )}
       </Card>
 
       {/* App-order board (only when there are app orders) — app lifecycle */}
@@ -94,7 +106,7 @@ function Board({ cols, colLabel, options, optionLabel, orders, onStatus }) {
                 <Card key={o.id} style={{ padding: 14, borderRadius: 14 }}>
                   <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
                     <span style={{ fontWeight: 700, color: C.navy, fontSize: 13.5 }}>{o.customer_name}</span>
-                    <Badge tone="info">#{o.order_no}</Badge>
+                    <Badge tone="info">#{orderRef(o)}</Badge>
                   </div>
                   <div className="flex items-center gap-2" style={{ marginBottom: 10, color: C.textMute, fontSize: 12 }}>
                     <Shirt size={14} /> {new Date(o.created_at).toLocaleDateString("en-GB")}

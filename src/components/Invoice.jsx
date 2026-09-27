@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import JsBarcode from "jsbarcode";
 import { Printer, X, MessageCircle, Tag as TagIcon, FileText } from "lucide-react";
-import { C, DISPLAY, STORE, inr, collected } from "../theme";
+import { C, DISPLAY, STORE, inr, collected, orderRef } from "../theme";
 import { Logo, Btn, iconBtn } from "./ui";
 import * as api from "../lib/api";
 import { rollupCustomer } from "../lib/api";
@@ -80,13 +80,13 @@ function printTags({ order, customer, units, size }) {
 
   const tagHtml = units.map((u, i) => `
     <div class="tag">
-      <div class="big">Order #${esc(order.order_no)}</div>
+      <div class="big">Order #${esc(orderRef(order))}</div>
       <div class="mid">Customer · ${esc(customer?.code || "CL—")}</div>
       <div class="row"><span>In: ${esc(fmtDate(order.created_at))}</span><span>Due: ${esc(fmtDate(order.due_date))}</span></div>
       <div class="name">${esc(u.product_name)}</div>
       ${u.service_type ? `<div class="svc">${esc(u.service_type)}</div>` : ""}
       ${u.sublabel ? `<div class="sub">${esc(u.sublabel)}</div>` : ""}
-      <div class="bc"><img src="${barcodePng(`${order.order_no}-${i + 1}`, { height: thermal ? 64 : 40, width: thermal ? 2.4 : 1.6 })}"/></div>
+      <div class="bc"><img src="${barcodePng(`${orderRef(order)}-${i + 1}`, { height: thermal ? 64 : 40, width: thermal ? 2.4 : 1.6 })}"/></div>
       <div class="count">${i + 1} / ${total}</div>
       <div class="store">${esc(STORE.name.toUpperCase())}</div>
     </div>`).join("");
@@ -117,7 +117,7 @@ function printTags({ order, customer, units, size }) {
     .store { font-size:${thermal ? 11 : 9}px; letter-spacing:.08em; font-weight:700; }
   </style>`;
 
-  printDoc({ head: css, body: `<div class="sheet">${tagHtml}</div>`, title: `Tags · #${order.order_no}` });
+  printDoc({ head: css, body: `<div class="sheet">${tagHtml}</div>`, title: `Tags · #${orderRef(order)}` });
 }
 
 export default function Invoice({ order, customers = [], orders = [], subscriptions = [], onClose, initialMode = "invoice" }) {
@@ -191,7 +191,7 @@ export default function Invoice({ order, customers = [], orders = [], subscripti
       img { max-width: 100%; }
       table { width: 100%; border-collapse: collapse; }
     </style>`;
-    printDoc({ head: css, body: `<div style="max-width:640px;margin:0 auto;">${area.innerHTML}</div>`, title: `Invoice · #${order.order_no}` });
+    printDoc({ head: css, body: `<div style="max-width:640px;margin:0 auto;">${area.innerHTML}</div>`, title: `Invoice · #${orderRef(order)}` });
   };
   const onWhatsApp = () => {
     if (!order.phone) { alert("No phone number on this order."); return; }
@@ -215,7 +215,7 @@ export default function Invoice({ order, customers = [], orders = [], subscripti
 
     const lines = [
       `*${STORE.name}*`,
-      `Invoice *#${order.order_no}*`,
+      `Invoice *#${orderRef(order)}*`,
       `Dear ${order.customer_name},`,
       ``,
       `*Your order:*`,
@@ -328,7 +328,7 @@ function InvoiceBody({ order, items, loading, prevAmount, paidNow, balance, acti
         <div style={{ fontSize: 11, color: C.textMute, letterSpacing: ".08em", textTransform: "uppercase", marginTop: 2 }}>{STORE.tagline}</div>
       </div>
 
-      <h2 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 22, textAlign: "center", margin: "6px 0 16px" }}>Invoice #{order.order_no}</h2>
+      <h2 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 22, textAlign: "center", margin: "6px 0 16px" }}>Invoice #{orderRef(order)}</h2>
 
       <div style={{ borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`, padding: "10px 0", marginBottom: 12, fontSize: 13, lineHeight: 1.7 }}>
         <div><b>Invoice Date:</b> {fmtDateTime(order.created_at)}</div>
@@ -449,8 +449,8 @@ function InvoiceBody({ order, items, loading, prevAmount, paidNow, balance, acti
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 14 }}>
-        <Barcode value={order.order_no} height={48} />
-        <p style={{ fontSize: 14, fontWeight: 700, marginTop: 4, letterSpacing: ".05em" }}>#{order.order_no}</p>
+        <Barcode value={orderRef(order)} height={48} />
+        <p style={{ fontSize: 14, fontWeight: 700, marginTop: 4, letterSpacing: ".05em" }}>#{orderRef(order)}</p>
       </div>
 
       <p style={{ marginTop: 16, padding: "0 14px", color: "#5C6B78", fontSize: 11.5, textAlign: "center", fontStyle: "italic", lineHeight: 1.5 }}>
@@ -505,7 +505,7 @@ function TagsBody({ order, units, customer, loading, size = "thermal" }) {
             width: thermal ? "min(100%, 320px)" : "auto",
           }}>
           <div style={{ fontWeight: 800, fontSize: thermal ? 22 : 14, lineHeight: 1.1 }}>
-            Order #{order.order_no}
+            Order #{orderRef(order)}
           </div>
           <div style={{ fontWeight: 700, fontSize: thermal ? 15 : 11.5 }}>
             Customer · {customer?.code || "CL—"}
@@ -526,7 +526,7 @@ function TagsBody({ order, units, customer, loading, size = "thermal" }) {
           )}
           <div style={{ display: "flex", justifyContent: "center", margin: thermal ? "6px 0 2px" : "2px 0" }}>
             <Barcode
-              value={`${order.order_no}-${i + 1}`}
+              value={`${orderRef(order)}-${i + 1}`}
               height={thermal ? 70 : 36}
               width={thermal ? 2.6 : 1.4}
               displayValue

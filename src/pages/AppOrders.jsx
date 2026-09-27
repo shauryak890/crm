@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Smartphone, Bike, MapPin, Phone, RefreshCw, UserPlus, Clock } from "lucide-react";
-import { C, DISPLAY, inr } from "../theme";
+import { C, DISPLAY, inr, orderRef } from "../theme";
 import { Card, PageHead, Badge, Btn, IconCircle, Modal, field, fieldLabel } from "../components/ui";
 import * as api from "../lib/api";
 
@@ -227,7 +227,7 @@ function WeighModal({ order, onClose, onWeighed, toast }) {
       await api.applyActualWeights(order.id, payload);
       // Advance to at_outlet now that it's weighed + priced.
       await api.updateOrderStatus(order.id, "at_outlet");
-      toast && toast(`#${order.order_no} weighed — customer notified of the updated total`);
+      toast && toast(`#${orderRef(order)} weighed — customer notified of the updated total`);
       await onWeighed();
     } catch (e) {
       setErr(e.message || "Could not save weights.");
@@ -237,7 +237,7 @@ function WeighModal({ order, onClose, onWeighed, toast }) {
 
   return (
     <Modal
-      title={`Weigh order · #${order.order_no}`}
+      title={`Weigh order · #${orderRef(order)}`}
       sub="Enter the actual weight for each item. The price updates and the customer is notified."
       onClose={onClose}
       width={480}
@@ -358,7 +358,7 @@ function OrderRow({ o, assignedTypes, onAssign, onStatus }) {
           <IconCircle icon={Smartphone} tone="teal" size={40} />
           <div>
             <div className="flex items-center gap-2">
-              <span style={{ fontWeight: 700, color: C.navy, fontSize: 14.5 }}>#{o.order_no}</span>
+              <span style={{ fontWeight: 700, color: C.navy, fontSize: 14.5 }}>#{orderRef(o)}</span>
               <Badge tone={STATE_TONE[o.order_status] || "muted"}>{STATE_LABEL[o.order_status] || o.order_status}</Badge>
             </div>
             <p style={{ fontSize: 13, color: C.text, fontWeight: 600, marginTop: 3 }}>{o.customer_name}</p>
@@ -414,7 +414,7 @@ function AssignModal({ order, type = "pickup", drivers, onClose, onAssigned, onN
     setSaving(true);
     try {
       await api.assignDriver({ order_id: order.id, driver_id: driverId, type });
-      toast && toast(`${isDelivery ? "Delivery" : "Pickup"} assigned for #${order.order_no}`);
+      toast && toast(`${isDelivery ? "Delivery" : "Pickup"} assigned for #${orderRef(order)}`);
       await onAssigned();
     } catch (e) {
       toast && toast("Assign failed: " + e.message);
@@ -438,7 +438,7 @@ function AssignModal({ order, type = "pickup", drivers, onClose, onAssigned, onN
   };
 
   return (
-    <Modal title={`Assign ${verb} · #${order.order_no}`} sub={order.customer_name} onClose={onClose} width={440}>
+    <Modal title={`Assign ${verb} · #${orderRef(order)}`} sub={order.customer_name} onClose={onClose} width={440}>
       {drivers.length === 0 && !adding && (
         <p style={{ fontSize: 13, color: C.textMute, marginBottom: 14, lineHeight: 1.5 }}>
           No drivers yet. Add one to assign this pickup.

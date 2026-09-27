@@ -126,6 +126,28 @@ export const collected = (o) => {
 export const balanceDue = (o) =>
   String(o.order_status || "").toLowerCase() === "cancelled" ? 0 : Math.max(0, Number(o.total || 0) - collected(o));
 
+// The order number staff and customers see: the per-outlet label
+// ("RKP-883"), so each outlet's register runs without gaps. Falls back to
+// the global order_no for rows from before per_outlet_order_numbers.sql.
+export const orderRef = (o) => (o?.order_label || String(o?.order_no ?? ""));
+
+// Resolve a scanned barcode or a typed number to orders.
+//  • New barcodes carry the label: "RKP-883" (invoice) / "RKP-883-2" (tag).
+//  • Tags printed earlier carry the bare global number: "876" / "876-2".
+//  • A number typed by hand is the outlet number staff read off the
+//    register, which for older orders is the same as the global number.
+// Returns every match. More than one only happens for a super_admin
+// typing a bare number that exists at two outlets.
+export function findOrdersByRef(orders, raw) {
+  const s = String(raw || "").trim().toUpperCase();
+  const label = s.match(/^([A-Z][A-Z0-9]*)-(\d+)/);
+  if (label) return orders.filter((o) => o.order_label === `${label[1]}-${label[2]}`);
+  const num = (s.match(/\d+/) || [])[0];
+  if (!num) return [];
+  const byOutlet = orders.filter((o) => String(o.outlet_order_no) === num);
+  return byOutlet.length ? byOutlet : orders.filter((o) => String(o.order_no) === num);
+}
+
 export const inr = (n) => "₹" + Number(n || 0).toLocaleString("en-IN");
 
 export const STORE = {

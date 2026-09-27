@@ -747,7 +747,9 @@ export async function approveDriverAccount(userId) {
 export async function fetchTasks() {
   const { data, error } = await supabase
     .from("tasks")
-    .select("*, order:orders(order_no, customer_name, address, order_status)")
+    // orders(*) rather than naming order_label, so this keeps working
+    // whether or not per_outlet_order_numbers.sql has been run yet.
+    .select("*, order:orders(*)")
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data;

@@ -117,8 +117,11 @@ export function DataTable({ columns, data, searchKeys, renderRow, placeholder = 
   const [entries, setEntries] = useState(defaultEntries);
   const [page, setPage] = useState(1);
 
+  // A search key is a field name, or a function for a derived value
+  // (so rows never need extra fields bolted on just to be searchable).
   const filtered = useMemo(
-    () => data.filter((r) => searchKeys.some((k) => String(r[k] ?? "").toLowerCase().includes(q.toLowerCase()))),
+    () => data.filter((r) => searchKeys.some((k) =>
+      String((typeof k === "function" ? k(r) : r[k]) ?? "").toLowerCase().includes(q.toLowerCase()))),
     [q, data, searchKeys]
   );
   const pages = Math.max(1, Math.ceil(filtered.length / entries));

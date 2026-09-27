@@ -5,7 +5,7 @@ import {
   Menu, Check, LogOut, Tag, Lock, Minimize2, PackagePlus, Wallet, BadgePercent,
 } from "lucide-react";
 
-import { C, DISPLAY, inr, collected } from "./theme";
+import { C, DISPLAY, inr, collected, orderRef } from "./theme";
 import { supabase, isConfigured } from "./lib/supabase";
 import * as api from "./lib/api";
 import { isToday } from "./lib/aggregate";
@@ -197,7 +197,7 @@ export default function App() {
   const onPay = async (order, items) => {
     try {
       const o = await api.createOrder({ order, items });
-      toast(`Order #${o.order_no} billed · ${inr(o.total)}`);
+      toast(`Order #${orderRef(o)} billed · ${inr(o.total)}`);
       await refresh();
       setInvoiceOrder(o);
       return true;
@@ -249,24 +249,24 @@ export default function App() {
   const onEditOrder = async ({ id, before, fields, items }) => {
     try {
       await api.updateOrderFull({ id, before, fields, items, editor });
-      toast(`Order #${before.order_no} updated`);
+      toast(`Order #${orderRef(before)} updated`);
       await refresh();
       return true;
     } catch (e) { toast("Edit failed: " + e.message); return false; }
   };
   const onDeleteOrder = async (o) => {
-    if (!confirm(`Delete order #${o.order_no} permanently? This cannot be undone.`)) return;
+    if (!confirm(`Delete order #${orderRef(o)} permanently? This cannot be undone.`)) return;
     try {
       if (o.image_urls?.length) { try { await api.deleteOrderPhotos(o.image_urls); } catch {/* best effort */} }
       await api.deleteOrder({ id: o.id, editor });
-      toast(`Order #${o.order_no} deleted`);
+      toast(`Order #${orderRef(o)} deleted`);
       await refresh();
     } catch (e) { toast("Delete failed: " + e.message); }
   };
   const onChangeDeliveryDate = async ({ id, before, due_date, reason }) => {
     try {
       await api.changeDeliveryDate({ id, before, due_date, reason, editor });
-      toast(`Delivery date updated for #${before.order_no}`);
+      toast(`Delivery date updated for #${orderRef(before)}`);
       await refresh();
       return true;
     } catch (e) { toast("Could not update date: " + e.message); return false; }

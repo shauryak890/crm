@@ -1,4 +1,4 @@
-import { STORE, collected, inr } from "../theme";
+import { STORE, collected, inr, orderRef } from "../theme";
 
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
@@ -24,7 +24,7 @@ export function buildReportData({ orders, expenses, outlets = [], from, to, isSu
     .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
     .map((o) => ({
       date: fmtDateTime(o.created_at),
-      order_no: o.order_no,
+      order_no: orderRef(o),
       outlet: isSuperAdmin ? outletName(o.outlet_id) : undefined,
       customer: o.customer_name || "—",
       items: o.pieces != null ? `${o.pieces} pcs` : "—",

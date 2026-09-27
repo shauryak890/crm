@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Bike, MapPin, Phone, RefreshCw, UserPlus, Package, Link2, Check, UserCheck, Copy } from "lucide-react";
-import { C, DISPLAY } from "../theme";
+import { C, DISPLAY, orderRef } from "../theme";
 import { Card, PageHead, Badge, Btn, IconCircle, Modal, field, fieldLabel } from "../components/ui";
 import * as api from "../lib/api";
 
@@ -196,7 +196,7 @@ export default function LiveTracking({ toast }) {
                       <div>
                         <div className="flex items-center gap-2">
                           <Badge tone={TASK_TONE[task.status] || "muted"}>{task.type} · {task.status.replace("_", " ")}</Badge>
-                          {task.order && <span style={{ fontSize: 13, fontWeight: 700, color: C.navy }}>#{task.order.order_no}</span>}
+                          {task.order && <span style={{ fontSize: 13, fontWeight: 700, color: C.navy }}>#{orderRef(task.order)}</span>}
                         </div>
                         {task.order?.address && <p className="inline-flex items-start gap-1.5" style={{ fontSize: 12.5, color: C.textMute, marginTop: 4 }}><MapPin size={13} style={{ marginTop: 2, flexShrink: 0 }} /> {task.order.address}</p>}
                       </div>
