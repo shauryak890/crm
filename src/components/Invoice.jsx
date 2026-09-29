@@ -120,7 +120,7 @@ function printTags({ order, customer, units, size }) {
   printDoc({ head: css, body: `<div class="sheet">${tagHtml}</div>`, title: `Tags · #${orderRef(order)}` });
 }
 
-export default function Invoice({ order, customers = [], orders = [], subscriptions = [], onClose, initialMode = "invoice" }) {
+export default function Invoice({ order, customers = [], orders = [], subscriptions = [], outlets = [], onClose, initialMode = "invoice" }) {
   const [mode, setMode] = useState(initialMode); // 'invoice' | 'tags'
   const [tagSize, setTagSize] = useState("thermal"); // 'thermal' | 'sheet'
   const [items, setItems] = useState([]);
@@ -135,6 +135,10 @@ export default function Invoice({ order, customers = [], orders = [], subscripti
   }, [order.id]);
 
   const customer = customers.find((c) => c.id === order.customer_id) || null;
+  // The contact number printed on the invoice is the billing outlet's own
+  // (outlets.phone), so each store's customers call the right branch.
+  // Falls back to the head-office number if that outlet has none saved.
+  const outletPhone = outlets.find((o) => o.id === order.outlet_id)?.phone || STORE.phone;
   // Previous outstanding = customer's rest (Total - Paid across ALL their
   // orders) minus this order's contribution if it's unpaid.
   const prevAmount = (() => {
@@ -281,7 +285,8 @@ export default function Invoice({ order, customers = [], orders = [], subscripti
           {mode === "invoice" ? (
             <InvoiceBody order={order} items={items} loading={loading}
               prevAmount={prevAmount} paidNow={paidNow} balance={balance}
-              activeSubscription={showSubscription ? activeSubscription : null} subRemainingKg={subRemainingKg} />
+              activeSubscription={showSubscription ? activeSubscription : null} subRemainingKg={subRemainingKg}
+              phone={outletPhone} />
           ) : (
             <TagsBody order={order} units={tagUnits} customer={customer} loading={loading} size={tagSize} />
           )}
@@ -317,7 +322,7 @@ const segStyle = (active) => ({
 });
 
 /* ---------------- Invoice body ---------------- */
-function InvoiceBody({ order, items, loading, prevAmount, paidNow, balance, activeSubscription, subRemainingKg }) {
+function InvoiceBody({ order, items, loading, prevAmount, paidNow, balance, activeSubscription, subRemainingKg, phone }) {
   return (
     <div style={{ color: "#000" }}>
       <div className="flex flex-col items-center" style={{ marginBottom: 16 }}>
@@ -444,7 +449,7 @@ function InvoiceBody({ order, items, loading, prevAmount, paidNow, balance, acti
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontFamily: DISPLAY, fontWeight: 800, color: C.navy }}>{STORE.name}</div>
-          {STORE.phone && <div style={{ fontSize: 12, color: C.textMute }}>📞 {STORE.phone}</div>}
+          {phone && <div style={{ fontSize: 12, color: C.textMute }}>📞 {phone}</div>}
         </div>
       </div>
 
