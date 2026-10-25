@@ -136,7 +136,7 @@ export default function HQOffers({ toast }) {
       <div className="flex items-end justify-between flex-wrap gap-3" style={{ marginBottom: 22 }}>
         <div>
           <p className="wb-eyebrow" style={{ color: "#9FB5C5" }}>Corporate · marketing</p>
-          <h1 style={{ fontSize: 32, fontWeight: 700, color: "#fff", letterSpacing: "-.02em", marginTop: 6 }}>Offers &amp; Banners</h1>
+          <h1 className="wb-hq-title" style={{ fontSize: 32, fontWeight: 700, color: "#fff", letterSpacing: "-.02em", marginTop: 6 }}>Offers &amp; Banners</h1>
           <p style={{ color: "#9FB5C5", fontSize: 13.5, marginTop: 6 }}>Promo banners shown in the customer app. Each has a working coupon code.</p>
         </div>
         <Btn variant="primary" icon={Plus} onClick={openNew}>New offer</Btn>
@@ -149,7 +149,7 @@ export default function HQOffers({ toast }) {
       ) : offers.length === 0 ? (
         <Card><div style={{ padding: "48px 0", textAlign: "center", color: C.textFaint, fontSize: 14 }}>No offers yet. Create your first banner.</div></Card>
       ) : (
-        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(320px,1fr))" }}>
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(min(320px,100%),1fr))" }}>
           {offers.map((o) => (
             <Card key={o.id} pad={false} style={{ overflow: "hidden" }}>
               <div style={{ position: "relative", aspectRatio: "16/7", background: C.bg }}>
@@ -216,7 +216,7 @@ export default function HQOffers({ toast }) {
               placeholder="Flat ₹50 off your first wash this monsoon!" />
           </div>
 
-          <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr", marginBottom: 14 }}>
+          <div className="grid gap-3 wb-form-grid" style={{ gridTemplateColumns: "1fr 1fr", marginBottom: 14 }}>
             <div>
               <label style={fieldLabel}>Coupon code *</label>
               <input style={{ ...field, textTransform: "uppercase", letterSpacing: ".04em" }} value={form.coupon_code}
@@ -233,7 +233,7 @@ export default function HQOffers({ toast }) {
             </div>
           </div>
 
-          <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr 1fr", marginBottom: 14 }}>
+          <div className="grid gap-3 wb-form-grid" style={{ gridTemplateColumns: "1fr 1fr 1fr", marginBottom: 14 }}>
             <div>
               <label style={fieldLabel}>{form.discount_type === "percent" ? "Percent *" : "Amount (₹) *"}</label>
               <input style={field} type="number" min="1" value={form.discount_value}

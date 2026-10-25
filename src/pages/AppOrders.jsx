@@ -73,11 +73,10 @@ export default function AppOrders({ toast }) {
   // Realtime: re-load whenever any order row changes. RLS guarantees we
   // only receive this outlet's rows; we filter to channel='app' in load().
   useEffect(() => {
-    const ch = api.subscribeAppOrders(() => load());
-    // supabase status callback flips `live` once subscribed.
-    if (ch && ch.state) setLive(true);
-    const t = setTimeout(() => setLive(true), 800);
-    return () => { clearTimeout(t); api.unsubscribe(ch); };
+    // "Live" reflects the real channel state — it goes grey again if the
+    // realtime connection drops, instead of always claiming to be live.
+    const ch = api.subscribeAppOrders(() => load(), (status) => setLive(status === "SUBSCRIBED"), "app-orders-page");
+    return () => { api.unsubscribe(ch); };
   }, [load]);
 
   // Advance an app order through its lifecycle from the CRM. Optimistic
@@ -94,6 +93,11 @@ export default function AppOrders({ toast }) {
         return;
       }
     }
+    if (status === "delivered") {
+      const order = orders.find((o) => o.id === id);
+      if (!confirm(`Mark ${order ? "#" + orderRef(order) : "this order"} as delivered?`
+        + (order?.image_urls?.length ? `\n\nIts ${order.image_urls.length} damage photo(s) will be permanently deleted.` : ""))) return;
+    }
     setOrders((p) => p.map((o) => (o.id === id ? { ...o, order_status: status } : o)));
     try {
       if (status === "delivered") {
@@ -106,7 +110,8 @@ export default function AppOrders({ toast }) {
   }, [toast, load, orders]);
 
   const pending = orders.filter((o) => o.order_status === "pending_pickup");
-  const active = orders.filter((o) => o.order_status !== "pending_pickup" && o.order_status !== "delivered");
+  // Customer-cancelled orders are finished, not "in progress".
+  const active = orders.filter((o) => o.order_status !== "pending_pickup" && o.order_status !== "delivered" && o.order_status !== "cancelled");
   const done = orders.filter((o) => o.order_status === "delivered");
 
   return (

@@ -7,6 +7,7 @@ import { Card, PageHead, Btn, field, fieldLabel } from "../components/ui";
 export default function Settings({ profile, session, toast, onRefresh }) {
   const [name, setName] = useState(profile?.name || "");
   const [password, setPassword] = useState("");
+  const [password2, setPassword2] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
@@ -33,6 +34,7 @@ export default function Settings({ profile, session, toast, onRefresh }) {
 
   const saveHours = async () => {
     if (!profile?.outlet_id) return;
+    if (opening && closing && closing <= opening) { toast("Closing time must be after opening time.", "error"); return; }
     setSavingHours(true);
     try {
       const { error } = await supabase
@@ -53,16 +55,21 @@ export default function Settings({ profile, session, toast, onRefresh }) {
   const save = async () => {
     setBusy(true); setMsg("");
     try {
-      if (name && name !== profile?.name) {
-        await supabase.from("profiles").update({ name }).eq("id", session.user.id);
-        await supabase.auth.updateUser({ data: { name } });
+      if (password && password.length < 8) throw new Error("New password must be at least 8 characters.");
+      if (password && password !== password2) throw new Error("The two passwords don't match.");
+      const trimmed = name.trim();
+      if (trimmed && trimmed !== profile?.name) {
+        const { error: pErr } = await supabase.from("profiles").update({ name: trimmed }).eq("id", session.user.id);
+        if (pErr) throw pErr;
+        const { error: aErr } = await supabase.auth.updateUser({ data: { name: trimmed } });
+        if (aErr) throw aErr;
       }
       if (password) {
         const { error } = await supabase.auth.updateUser({ password });
         if (error) throw error;
       }
       toast("Profile updated");
-      setPassword("");
+      setPassword(""); setPassword2("");
       onRefresh();
     } catch (e) {
       setMsg(e.message);
@@ -79,7 +86,10 @@ export default function Settings({ profile, session, toast, onRefresh }) {
           <div style={{ marginBottom: 16 }}><label style={fieldLabel}>Name</label><input style={field} value={name} onChange={(e) => setName(e.target.value)} /></div>
           <div style={{ marginBottom: 16 }}><label style={fieldLabel}>Email</label><input style={{ ...field, background: "#F2F6F9", color: C.textMute }} value={session?.user?.email || ""} disabled /></div>
           <p style={{ fontSize: 12.5, color: C.textFaint, marginBottom: 16 }}>Leave the password field blank if you don't want to change it.</p>
-          <div style={{ marginBottom: 22 }}><label style={fieldLabel}>New Password</label><input type="password" style={field} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" /></div>
+          <div style={{ marginBottom: 22 }}><label style={fieldLabel}>New Password</label><input type="password" autoComplete="new-password" style={field} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="min 8 characters" /></div>
+          {password && (
+            <div style={{ marginTop: -6, marginBottom: 22 }}><label style={fieldLabel}>Confirm new password</label><input type="password" autoComplete="new-password" style={field} value={password2} onChange={(e) => setPassword2(e.target.value)} /></div>
+          )}
           {msg && <div style={{ background: C.redLt, color: C.red, fontSize: 13, fontWeight: 600, padding: "10px 14px", borderRadius: 10, marginBottom: 16 }}>{msg}</div>}
           <Btn variant="navy" icon={Check} onClick={save} disabled={busy}>Update Profile</Btn>
         </Card>

@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard, ShoppingCart, ReceiptText, Truck, Users as UsersIcon, UserCog,
   BarChart3, ClipboardList, Settings as SettingsIcon, Smartphone, MapPin, Search, Bell,
-  Menu, Check, LogOut, Tag, Lock, Minimize2, PackagePlus, Wallet, BadgePercent,
+  Menu, Check, X, LogOut, Tag, Lock, Minimize2, PackagePlus, Wallet, BadgePercent,
 } from "lucide-react";
 
-import { C, DISPLAY, inr, collected, orderRef } from "./theme";
+import { C, DISPLAY, inr, collected, balanceDue, orderRef, localIsoDate, isDelivered, isCancelled, APP_LIFECYCLE_LABEL } from "./theme";
 import { supabase, isConfigured } from "./lib/supabase";
 import * as api from "./lib/api";
 import { isToday } from "./lib/aggregate";
@@ -29,6 +29,7 @@ import AppOrders from "./pages/AppOrders";
 import LiveTracking from "./pages/LiveTracking";
 import Invoice from "./components/Invoice";
 import DeliveryAlert from "./components/DeliveryAlert";
+import GlobalSearch from "./components/GlobalSearch";
 import HQPanel from "./pages/hq/HQPanel";
 
 const NAV = [
@@ -60,6 +61,11 @@ const NAV = [
 ];
 
 const ADMIN_VIEWS = new Set(["catalogue", "users"]);
+const VIEW_IDS = new Set(NAV.flatMap((g) => g.items.map((i) => i.id)));
+const viewFromPath = () => {
+  const p = typeof window !== "undefined" ? window.location.pathname.replace(/^\/+|\/+$/g, "") : "";
+  return VIEW_IDS.has(p) ? p : "dashboard";
+};
 
 function AccessDenied() {
   return (
@@ -96,7 +102,12 @@ VITE_SUPABASE_ANON_KEY=eyJhbGci...`}</pre>
 export default function App() {
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(false);
-  const [view, setView] = useState("dashboard");
+  // The page lives in the URL path (/sales, /expenses …) so a refresh or
+  // the browser's back button keeps you where you were.
+  const [view, setView] = useState(() => viewFromPath());
+  // A one-shot "open this page filtered like so" request, e.g. Dashboard
+  // → Sales filtered to Unpaid. Pages read it as their initial state.
+  const [navIntent, setNavIntent] = useState(null);
   const [sidebar, setSidebar] = useState(false);
   const [toastMsg, setToastMsg] = useState(null);
 
@@ -110,11 +121,13 @@ export default function App() {
   const [profiles, setProfiles] = useState([]);
   const [orderItems, setOrderItems] = useState([]);
   const [outlets, setOutlets] = useState([]);
+  const [supplyOrders, setSupplyOrders] = useState([]);
   const [billingOutletId, setBillingOutletId] = useState("");  // super-admin's chosen outlet for POS
   const [dashOutletId, setDashOutletId] = useState("");        // super-admin's Dashboard filter ("" = all outlets)
   const [loading, setLoading] = useState(true);
   const [invoiceOrder, setInvoiceOrder] = useState(null);
   const [focusMode, setFocusMode] = useState(false);
+  const [customerQuery, setCustomerQuery] = useState(""); // pre-fills Customers search (from header search)
 
   // HQ is reached only via the URL hash #hq — there is no button or nav
   // link anywhere in the app. Even with the hash, it only opens for a
@@ -126,6 +139,12 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  useEffect(() => {
+    const onPop = () => { setView(viewFromPath()); setNavIntent(null); };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   // Exit focus when leaving POS or when the user hits Escape.
   useEffect(() => { if (view !== "pos") setFocusMode(false); }, [view]);
   useEffect(() => {
@@ -135,7 +154,18 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [focusMode]);
 
-  const toast = useCallback((m) => { setToastMsg(m); setTimeout(() => setToastMsg(null), 3200); }, []);
+  // tone: "success" | "error". Error toasts are inferred from the usual
+  // "Could not… / …failed" wording when no tone is passed. A new toast
+  // resets the timer so it can't be hidden early by the previous one's.
+  const toastTimer = useRef(null);
+  // opts.undo: a function — shows an "Undo" button and keeps the toast up
+  // longer, so reversible actions don't need an "are you sure?" first.
+  const toast = useCallback((m, tone, opts = {}) => {
+    const t = tone || (/^(could not|load error|update failed|edit failed|delete failed|.*failed:)/i.test(m) ? "error" : "success");
+    setToastMsg({ text: m, tone: t, undo: opts.undo || null, id: Date.now() });
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMsg(null), opts.undo ? 7000 : t === "error" ? 6000 : 3200);
+  }, []);
 
   /* auth bootstrap */
   useEffect(() => {
@@ -150,15 +180,16 @@ export default function App() {
     if (!session) return;
     setLoading(true);
     try {
-      const [prod, cust, ord, exp, subs, plans, profs, items, outs] = await Promise.all([
+      const [prod, cust, ord, exp, subs, plans, profs, items, outs, supply] = await Promise.all([
         api.fetchProducts(), api.fetchCustomers(), api.fetchOrders(),
         api.fetchExpenses(), api.fetchCustomerSubscriptions().catch((e) => { console.error("fetchCustomerSubscriptions failed:", e); toast("Could not load subscriptions: " + e.message); return []; }),
         api.fetchSubscriptionPlans().catch((e) => { console.error("fetchSubscriptionPlans failed:", e); toast("Could not load plans: " + e.message); return []; }),
         api.fetchProfiles(), api.fetchOrderItems(),
         api.fetchOutlets().catch((e) => { console.error("fetchOutlets failed:", e); toast("Could not load outlets: " + e.message); return []; }),
+        api.fetchSupplyOrders().catch((e) => { console.error("fetchSupplyOrders failed:", e); return []; }),
       ]);
       setProducts(prod); setCustomers(cust); setOrders(ord);
-      setExpenses(exp); setSubscriptions(subs); setSubscriptionPlans(plans); setProfiles(profs); setOrderItems(items); setOutlets(outs);
+      setExpenses(exp); setSubscriptions(subs); setSubscriptionPlans(plans); setProfiles(profs); setOrderItems(items); setOutlets(outs); setSupplyOrders(supply);
       setProfile(profs.find((p) => p.id === session.user.id) || null);
     } catch (e) {
       toast("Load error: " + e.message);
@@ -167,6 +198,26 @@ export default function App() {
   }, [session, toast]);
 
   useEffect(() => { if (session) refresh(); }, [session, refresh]);
+
+  // Keep orders live across the whole app — status changes from the
+  // customer/driver apps or another counter show up in Sales, Order
+  // Status and the Delivery List without a reload. Changes are batched
+  // (debounced) into one orders re-fetch; a brand-new app order also
+  // gets a toast so it isn't missed while staff are on another page.
+  useEffect(() => {
+    if (!session) return;
+    let timer = null;
+    const ch = api.subscribeAppOrders((payload) => {
+      if (payload?.eventType === "INSERT" && payload.new?.channel === "app") {
+        toast(`New app order${payload.new.customer_name ? " from " + payload.new.customer_name : ""}`);
+      }
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        api.fetchOrders().then(setOrders).catch((e) => console.warn("live orders refresh failed:", e.message));
+      }, 1500);
+    }, null, "app-shell-orders");
+    return () => { clearTimeout(timer); api.unsubscribe(ch); };
+  }, [session, toast]);
 
   if (!isConfigured) return <ConfigNeeded />;
   if (!authReady) return <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: C.textMute }}>Loading…</div>;
@@ -191,7 +242,12 @@ export default function App() {
     }
   }
 
-  const go = (v) => { setView(v); setSidebar(false); };
+  const go = (v, intent = null) => {
+    if (v !== "customers") setCustomerQuery("");
+    setNavIntent(intent ? { ...intent, view: v, id: Date.now() } : null);
+    if (v !== view || window.location.pathname !== "/" + v) window.history.pushState(null, "", "/" + v + window.location.search);
+    setView(v); setSidebar(false);
+  };
 
   /* mutators — each returns true/false and refreshes on success */
   const onPay = async (order, items) => {
@@ -206,21 +262,43 @@ export default function App() {
       return false;
     }
   };
+  // Returns true when the change went through (false = blocked/cancelled),
+  // so callers like the barcode scanner can report accurately.
   const onStatus = async (id, status) => {
-    setOrders((p) => p.map((o) => (o.id === id ? { ...o, order_status: status } : o)));
+    const o = orders.find((x) => x.id === id);
+    // App orders must be weighed before they're marked "At outlet" — the
+    // weigh-in recomputes the bill from actual kg. Only App Orders has the
+    // weigh-in modal, so block the shortcut from Sales / Order Status.
+    if (status === "at_outlet" && o?.channel === "app" && !o.weighed_at) {
+      toast(`Weigh #${orderRef(o)} in App Orders first — the bill is based on actual kg.`, "error");
+      return false;
+    }
+    const delivering = String(status).toLowerCase() === "delivered";
+    // Only ask first when the step can't be undone (photos get deleted) or
+    // money is still owed; otherwise just do it and offer Undo.
+    if (delivering && o && (o.image_urls?.length || balanceDue(o) > 0) && !confirm(`Mark #${orderRef(o)} as delivered?`
+        + (o.image_urls?.length ? `
+
+Its ${o.image_urls.length} damage photo(s) will be permanently deleted.` : "")
+        + (balanceDue(o) > 0 ? `
+
+${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
+      return false;
+    }
+    setOrders((p) => p.map((x) => (x.id === id ? { ...x, order_status: status, ...(delivering ? { delivery_status: "Delivered" } : {}) } : x)));
     try {
       // Walk-in orders use "Delivered"; app orders use "delivered". Treat
       // both as the terminal state that clears the prior-damage record.
-      if (String(status).toLowerCase() === "delivered") {
+      if (delivering) {
         // Once an order is delivered, the prior-damage record has served
         // its purpose. Wipe the photos from Storage and clear both
         // columns in one update. The DB has a safety-net trigger too.
-        const o = orders.find((x) => x.id === id);
         if (o?.image_urls?.length) {
           try { await api.deleteOrderPhotos(o.image_urls); } catch {/* best-effort */}
         }
         await api.updateOrderFields(id, {
           order_status: status,
+          delivery_status: "Delivered",
           damage_note: null,
           image_urls: [],
           delivered_at: new Date().toISOString(),
@@ -229,20 +307,57 @@ export default function App() {
       } else {
         await api.updateOrderStatus(id, status);
       }
+      if (o) {
+        const label = o.channel === "app" ? (APP_LIFECYCLE_LABEL[status] || status) : status;
+        const canUndo = !(delivering && o.image_urls?.length);
+        toast(`#${orderRef(o)} → ${label}`, "success", canUndo ? { undo: async () => {
+          const back = { order_status: o.order_status };
+          if (delivering) Object.assign(back, { delivery_status: o.delivery_status, delivered_at: o.delivered_at || null, damage_note: o.damage_note || null });
+          setOrders((p) => p.map((x) => (x.id === id ? { ...x, ...back } : x)));
+          try { await api.updateOrderFields(id, back); toast(`#${orderRef(o)} moved back to ${o.order_status}`); }
+          catch (e) { toast("Undo failed: " + e.message); refresh(); }
+        } } : {});
+      }
+      return true;
     } catch (e) {
       toast("Update failed: " + e.message);
       refresh();
+      return false;
     }
   };
-  const onTogglePaid = async (o) => {
-    // Cycle to fully Paid, or back to Unpaid. Keep amount_paid in step so
-    // revenue figures (which read collected money) stay accurate. Stamp
-    // paid_at only going Unpaid → Paid; clear it if reverted.
-    const next = o.payment_status === "Paid" ? "Unpaid" : "Paid";
-    const amount_paid = next === "Paid" ? Number(o.total) : 0;
-    const paid_at = next === "Paid" ? new Date().toISOString() : null;
-    setOrders((p) => p.map((x) => (x.id === o.id ? { ...x, payment_status: next, amount_paid, paid_at } : x)));
-    try { await api.updateOrderFields(o.id, { payment_status: next, amount_paid, paid_at }); } catch (e) { toast("Update failed: " + e.message); refresh(); }
+  // Record money received against an order. Keeps amount_paid in step so
+  // revenue (which reads collected money) stays accurate, and stamps
+  // paid_at the moment the order becomes fully paid.
+  const onCollectPayment = async ({ order: o, amount, method }) => {
+    const total = Number(o.total) || 0;
+    const amount_paid = Math.min(total, collected(o) + Number(amount));
+    const payment_status = amount_paid >= total ? "Paid" : amount_paid > 0 ? "Partial" : "Unpaid";
+    const fields = {
+      payment_status, amount_paid, payment_method: method,
+      paid_at: payment_status === "Paid" ? new Date().toISOString() : null,
+    };
+    try {
+      await api.updateOrderFields(o.id, fields);
+      setOrders((p) => p.map((x) => (x.id === o.id ? { ...x, ...fields } : x)));
+      const before = { payment_status: o.payment_status, amount_paid: o.amount_paid, payment_method: o.payment_method, paid_at: o.paid_at || null };
+      toast(`${inr(amount)} received on #${orderRef(o)}${payment_status === "Paid" ? " · fully paid" : ""}`, "success", { undo: async () => {
+        try {
+          await api.updateOrderFields(o.id, before);
+          setOrders((p) => p.map((x) => (x.id === o.id ? { ...x, ...before } : x)));
+          toast(`Payment on #${orderRef(o)} undone`);
+        } catch (e) { toast("Undo failed: " + e.message); }
+      } });
+      return true;
+    } catch (e) { toast("Could not record payment: " + e.message); return false; }
+  };
+  const onResetPayment = async (o) => {
+    const fields = { payment_status: "Unpaid", amount_paid: 0, paid_at: null };
+    try {
+      await api.updateOrderFields(o.id, fields);
+      setOrders((p) => p.map((x) => (x.id === o.id ? { ...x, ...fields } : x)));
+      toast(`#${orderRef(o)} reset to unpaid`);
+      return true;
+    } catch (e) { toast("Could not reset payment: " + e.message); return false; }
   };
   // who is making the edit — stamped into the audit trail
   const editor = { id: profile?.id || session.user.id, name: profile?.name || session.user.email };
@@ -258,7 +373,7 @@ export default function App() {
     if (!confirm(`Delete order #${orderRef(o)} permanently? This cannot be undone.`)) return;
     try {
       if (o.image_urls?.length) { try { await api.deleteOrderPhotos(o.image_urls); } catch {/* best effort */} }
-      await api.deleteOrder({ id: o.id, editor });
+      await api.deleteOrder({ id: o.id, editor, before: o });
       toast(`Order #${orderRef(o)} deleted`);
       await refresh();
     } catch (e) { toast("Delete failed: " + e.message); }
@@ -296,22 +411,34 @@ export default function App() {
     try { await api.createExpense(e); toast("Expense added"); await refresh(); return true; }
     catch (err) { toast("Could not add: " + err.message); return false; }
   };
+  const onUpdateExpense = async (id, fields) => {
+    try { await api.updateExpense(id, fields); toast("Expense updated"); await refresh(); return true; }
+    catch (err) { toast("Could not update: " + err.message); return false; }
+  };
+  const onDeleteExpense = async (e) => {
+    if (!confirm(`Delete expense ${e.expense_no || ""} "${e.title}" (${inr(e.amount)})? This cannot be undone.`)) return false;
+    try { await api.deleteExpense(e.id); toast("Expense deleted"); await refresh(); return true; }
+    catch (err) { toast("Could not delete: " + err.message); return false; }
+  };
   // Deduct kg from a customer's active subscription after a POS sale bills
   // against it. Called with the subscription row + the kg consumed by
   // this order; the CRM keeps a local optimistic update so the POS badge
   // reflects the new balance immediately, then reconciles on refresh.
   const onUseSubscription = async (sub, kgUsed) => {
-    const newTotal = Number(sub.weight_used_kg) + kgUsed;
-    setSubscriptions((p) => p.map((s) => (s.id === sub.id ? { ...s, weight_used_kg: newTotal } : s)));
-    try { await api.useSubscriptionWeight(sub.id, newTotal); }
-    catch (e) { toast("Subscription update failed: " + e.message); await refresh(); }
+    setSubscriptions((p) => p.map((s) => (s.id === sub.id ? { ...s, weight_used_kg: Number(s.weight_used_kg) + kgUsed } : s)));
+    try {
+      const newTotal = await api.useSubscriptionWeight(sub.id, kgUsed);
+      setSubscriptions((p) => p.map((s) => (s.id === sub.id ? { ...s, weight_used_kg: newTotal } : s)));
+    }
+    catch (e) { toast("Subscription update failed: " + e.message, "error"); await refresh(); }
   };
   // Sell a subscription plan straight from the POS counter. Returns the
   // created row (or null on failure) so POS can trigger the WhatsApp
   // activation notice with the real purchased/expiry dates.
   const onSellSubscription = async (customer, plan) => {
-    const outletId = isSuperAdmin ? billingOutletId : null;
-    if (isSuperAdmin && !outletId) { toast("Pick the outlet this order belongs to first."); return null; }
+    // File the plan under the customer's own outlet (super_admin path).
+    const outletId = isSuperAdmin ? (customer.outlet_id || billingOutletId) : null;
+    if (isSuperAdmin && !outletId) { toast("Pick the outlet this order belongs to first.", "error"); return null; }
     try {
       // Close out a plan that's really finished (past expiry, or fully
       // used up) but still marked 'active' in the DB — a partial unique
@@ -335,8 +462,6 @@ export default function App() {
   };
   const logout = async () => { await supabase.auth.signOut(); };
 
-  const todaySales = orders.filter((o) => isToday(o.created_at)).reduce((a, o) => a + collected(o), 0);
-  const todayCount = orders.filter((o) => isToday(o.created_at)).length;
   const displayName = profile?.name || session.user.email;
   const isSuperAdmin = profile?.role === "super_admin";
   // A super_admin gets full admin access inside the store panel too.
@@ -350,13 +475,35 @@ export default function App() {
   const dashOrders = dashOutletId ? orders.filter((o) => o.outlet_id === dashOutletId) : orders;
   const dashExpenses = dashOutletId ? expenses.filter((e) => e.outlet_id === dashOutletId) : expenses;
   const dashCustomers = dashOutletId ? customers.filter((c) => c.outlet_id === dashOutletId) : customers;
+  const dashSubscriptions = dashOutletId ? subscriptions.filter((s) => s.outlet_id === dashOutletId) : subscriptions;
+  const dashSupply = dashOutletId ? supplyOrders.filter((s) => s.outlet_id === dashOutletId) : supplyOrders;
+
+  // Sidebar badges — work waiting on each page, visible from anywhere.
+  const today = localIsoDate();
+  const openOrders = orders.filter((o) => !isDelivered(o) && !isCancelled(o) && o.delivery_status !== "Cancelled");
+  const dueToday = openOrders.filter((o) => o.due_date === today).length;
+  const overdue = openOrders.filter((o) => o.due_date && o.due_date < today).length;
+  const in7 = localIsoDate(7);
+  const badges = {
+    delivery: dueToday ? { n: dueToday, tone: "teal", title: `${dueToday} due today${overdue ? ` · ${overdue} overdue` : ""}` }
+      : overdue ? { n: overdue, tone: "red", title: `${overdue} overdue` } : null,
+    apporders: (() => { const n = orders.filter((o) => o.channel === "app" && o.order_status === "pending_pickup").length; return n ? { n, tone: "red", title: `${n} awaiting pickup` } : null; })(),
+    supplies: (() => {
+      const n = supplyOrders.filter((s) => (isSuperAdmin ? s.status === "requested" : s.status === "dispatched")).length;
+      return n ? { n, tone: "amber", title: isSuperAdmin ? `${n} awaiting HQ approval` : `${n} on the way` } : null;
+    })(),
+    subscriptions: (() => {
+      const n = subscriptions.filter((s) => s.status === "active" && String(s.expires_at).slice(0, 10) >= today && String(s.expires_at).slice(0, 10) <= in7).length;
+      return n ? { n, tone: "amber", title: `${n} plan(s) expiring this week` } : null;
+    })(),
+  };
 
   const visibleNav = NAV
     .map((grp) => ({ ...grp, items: grp.items.filter((it) => !it.adminOnly || isAdmin) }))
     .filter((grp) => grp.items.length > 0);
 
   return (
-    <div style={{ display: "flex", height: "100vh", background: C.bg, color: C.text, overflow: "hidden" }}>
+    <div className="wb-app-shell" style={{ display: "flex", height: "100vh", background: C.bg, color: C.text, overflow: "hidden" }}>
       {/* Sidebar — white, modern dashboard style */}
       {!focusMode && <aside className="wb-sidebar" data-open={sidebar}
         style={{ width: 248, flexShrink: 0, background: "#fff",
@@ -386,6 +533,11 @@ export default function App() {
                     data-active={active}>
                     <it.icon size={17} strokeWidth={active ? 2.2 : 1.7} color={active ? C.teal : C.textMute} />
                     <span style={{ flex: 1 }}>{it.label}</span>
+                    {badges[it.id] && (
+                      <span title={badges[it.id].title} style={{ fontSize: 10.5, fontWeight: 700, minWidth: 20, height: 20, padding: "0 6px", borderRadius: 99,
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        color: "#fff", background: { teal: C.teal, red: C.red, amber: C.amber }[badges[it.id].tone] }}>{badges[it.id].n}</span>
+                    )}
                     {it.soon && <span style={{ fontSize: 9.5, fontWeight: 600, color: C.tealDark, background: C.tealLight, padding: "2px 7px", borderRadius: 99, letterSpacing: ".04em" }}>SOON</span>}
                   </button>
                 );
@@ -406,17 +558,14 @@ export default function App() {
       </aside>}
 
       {/* Main */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        {!focusMode && <header className="flex items-center justify-between" style={{ background: "#fff", borderBottom: `1px solid ${C.border}`, padding: "0 28px", height: 68, flexShrink: 0, gap: 18 }}>
+      <div className="wb-app-main" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        {!focusMode && <header className="wb-app-header flex items-center justify-between" style={{ background: "#fff", borderBottom: `1px solid ${C.border}`, padding: "0 28px", height: 68, flexShrink: 0, gap: 18 }}>
           <button className="wb-burger wb-press" onClick={() => setSidebar((s) => !s)} style={{ ...iconBtn(C.bg, C.navy), display: "none" }}><Menu size={18} /></button>
 
           {/* Centered search */}
-          <div className="flex items-center gap-2" style={{ flex: 1, maxWidth: 460, background: C.bg, border: `1px solid ${C.border}`, padding: "8px 14px", borderRadius: 11 }}>
-            <Search size={15} color={C.textFaint} />
-            <input placeholder="Search orders, customers, products…"
-              style={{ flex: 1, border: "none", outline: "none", fontSize: 13.5, background: "transparent", color: C.text }} />
-            <span className="wb-kbd">⌘ K</span>
-          </div>
+          <GlobalSearch orders={orders} customers={customers}
+            onOpenOrder={setInvoiceOrder}
+            onOpenCustomer={(c) => { setCustomerQuery(c.phone || c.code || c.first_name); go("customers"); }} />
 
           {/* Profile chip — info only, no chevron / no menu */}
           <div className="flex items-center gap-2" style={{ paddingLeft: 8, paddingRight: 12, height: 40, borderRadius: 12, background: C.bg, border: `1px solid ${C.border}` }}>
@@ -428,28 +577,34 @@ export default function App() {
           </div>
         </header>}
 
-        <main style={{ flex: 1, overflowY: "auto", padding: focusMode ? "24px 32px" : "32px 36px", background: C.bg }}>
-          <div key={view} className="wb-enter">
+        <main className="wb-main" style={{ flex: 1, overflowY: "auto", padding: focusMode ? "24px 32px" : "32px 36px", background: C.bg }}>
+          <div key={view + (navIntent?.id || "")} className="wb-enter">
           {ADMIN_VIEWS.has(view) && !isAdmin ? <AccessDenied /> : (
             <>
-          {view === "dashboard" && <Dashboard orders={dashOrders} expenses={dashExpenses} go={go} displayName={displayName} customers={dashCustomers}
-            isSuperAdmin={isSuperAdmin} outlets={outlets} dashOutletId={dashOutletId} setDashOutletId={setDashOutletId} />}
+          {view === "dashboard" && <Dashboard orders={dashOrders} expenses={dashExpenses} subscriptions={dashSubscriptions} supplyOrders={dashSupply} go={go} displayName={displayName} customers={dashCustomers}
+            isSuperAdmin={isSuperAdmin} isAdmin={isAdmin} outlets={outlets} dashOutletId={dashOutletId} setDashOutletId={setDashOutletId} loading={loading} />}
           {view === "pos" && <POS products={products} customers={customers} orders={orders} onPay={onPay} profile={profile} focusMode={focusMode} setFocusMode={setFocusMode} isAdmin={isAdmin} onQuickAddProduct={onQuickAddProduct}
             isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId}
             subscriptions={subscriptions} onUseSubscription={onUseSubscription}
-            subscriptionPlans={subscriptionPlans} onSellSubscription={onSellSubscription} />}
-          {view === "sales" && <Sales orders={orders} loading={loading} products={products} isAdmin={isAdmin}
-            onStatus={onStatus} onTogglePaid={onTogglePaid} onOpenInvoice={setInvoiceOrder}
+            subscriptionPlans={subscriptionPlans} onSellSubscription={onSellSubscription} orderItems={orderItems} intent={navIntent} />}
+          {view === "sales" && <Sales orders={orders} loading={loading} products={products} isAdmin={isAdmin} intent={navIntent}
+            isSuperAdmin={isSuperAdmin} outlets={outlets} onDeleteOrder={onDeleteOrder}
+            onStatus={onStatus} onCollectPayment={onCollectPayment} onResetPayment={onResetPayment} onOpenInvoice={setInvoiceOrder}
             onEditOrder={onEditOrder} onQuickAddProduct={onQuickAddProduct}
             onChangeDeliveryDate={onChangeDeliveryDate} onMarkDelayNotified={onMarkDelayNotified} />}
-          {view === "orderstatus" && <OrderStatus orders={orders} onStatus={onStatus} />}
-          {view === "delivery" && <Delivery orders={orders} />}
-          {view === "customers" && <Customers customers={customers} orders={orders} loading={loading} onAdd={onAddCustomer} />}
-          {view === "supplies" && <Supplies profile={profile} toast={toast} isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} />}
-          {view === "subscriptions" && <Subscriptions profile={profile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} customers={customers} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} toast={toast} onRefresh={refresh} />}
-          {view === "expenses" && <Expenses expenses={expenses} loading={loading} onAdd={onAddExpense} />}
-          {view === "reports" && <Reports orders={orders} expenses={expenses} customers={customers} orderItems={orderItems} outlets={outlets} isSuperAdmin={isSuperAdmin} />}
-          {view === "catalogue" && <Catalogue onRefresh={refresh} toast={toast} />}
+          {view === "orderstatus" && <OrderStatus orders={orders} onStatus={onStatus} onOpenInvoice={setInvoiceOrder} />}
+          {view === "delivery" && <Delivery orders={orders} onStatus={onStatus} onCollectPayment={onCollectPayment} onResetPayment={onResetPayment}
+            isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} outlets={outlets} intent={navIntent} onOpenInvoice={setInvoiceOrder} />}
+          {view === "customers" && <Customers customers={customers} orders={orders} subscriptions={subscriptions} loading={loading} onAdd={onAddCustomer}
+            isSuperAdmin={isSuperAdmin} outlets={outlets} onOpenInvoice={setInvoiceOrder} initialQuery={customerQuery} intent={navIntent}
+            onCollectPayment={onCollectPayment} onResetPayment={onResetPayment} isAdmin={isAdmin} go={go} />}
+          {view === "supplies" && <Supplies profile={profile} toast={toast} onChanged={refresh} isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} />}
+          {view === "subscriptions" && <Subscriptions profile={profile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} customers={customers} intent={navIntent} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} toast={toast} onRefresh={refresh} />}
+          {view === "expenses" && <Expenses expenses={expenses} loading={loading} intent={navIntent} onAdd={onAddExpense} onUpdate={onUpdateExpense} onDelete={onDeleteExpense}
+            isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} outlets={outlets} />}
+          {view === "reports" && <Reports orders={orders} expenses={expenses} customers={customers} orderItems={orderItems} outlets={outlets} isSuperAdmin={isSuperAdmin}
+            subscriptions={subscriptions} supplyOrders={supplyOrders} go={go} />}
+          {view === "catalogue" && <Catalogue onRefresh={refresh} toast={toast} isSuperAdmin={isSuperAdmin} outlets={outlets} />}
           {view === "users" && <Users profiles={profiles} loading={loading} onRefresh={refresh} toast={toast} outlets={outlets} isSuperAdmin={isSuperAdmin} currentOutletId={profile?.outlet_id} />}
           {view === "settings" && <Settings profile={profile} session={session} toast={toast} onRefresh={refresh} />}
           {view === "apporders" && <AppOrders toast={toast} />}
@@ -473,7 +628,11 @@ export default function App() {
         />
       )}
 
-      <DeliveryAlert orders={orders} onJump={() => setView("delivery")} />
+      {/* Hidden on the counter screens, where its corner sits on top of
+          the Pay / Send buttons. */}
+      {view !== "pos" && view !== "supplies" && view !== "delivery" && (
+        <DeliveryAlert orders={orders} onJump={() => go("delivery")} />
+      )}
 
       {focusMode && (
         <button onClick={() => setFocusMode(false)} className="wb-press wb-toast-in"
@@ -487,9 +646,21 @@ export default function App() {
       )}
 
       {toastMsg && (
-        <div className="wb-toast-in flex items-center gap-3" style={{ position: "fixed", bottom: 28, right: 28, background: C.navy, color: "#fff", padding: "14px 20px 14px 16px", borderRadius: 16, boxShadow: "0 28px 60px -18px rgba(15,42,59,.5)", zIndex: 60, maxWidth: 420, border: `1px solid ${C.gold}33` }}>
-          <div className="flex items-center justify-center rounded-full" style={{ width: 30, height: 30, background: C.green, flexShrink: 0 }}><Check size={16} /></div>
-          <span style={{ fontWeight: 500, fontSize: 13.5, letterSpacing: ".005em" }}>{toastMsg}</span>
+        <div className="wb-no-print" style={{ position: "fixed", bottom: 28, left: 0, right: 0, display: "flex", justifyContent: "center", zIndex: 60, pointerEvents: "none", padding: "0 16px" }}>
+          <div key={toastMsg.id} className="wb-toast-in flex items-center gap-3" role={toastMsg.tone === "error" ? "alert" : "status"}
+            style={{ pointerEvents: "auto", background: C.navy, color: "#fff", padding: "12px 14px 12px 14px", borderRadius: 16, boxShadow: "0 28px 60px -18px rgba(15,42,59,.5)", maxWidth: 520 }}>
+            <div className="flex items-center justify-center rounded-full" style={{ width: 30, height: 30, background: toastMsg.tone === "error" ? C.red : C.green, flexShrink: 0 }}>
+              {toastMsg.tone === "error" ? <X size={16} /> : <Check size={16} />}
+            </div>
+            <span style={{ fontWeight: 500, fontSize: 13.5, letterSpacing: ".005em" }}>{toastMsg.text}</span>
+            {toastMsg.undo && (
+              <button onClick={() => { const u = toastMsg.undo; setToastMsg(null); u(); }}
+                style={{ marginLeft: 6, background: "rgba(255,255,255,.12)", color: C.tealMid, border: "none", borderRadius: 9, padding: "6px 12px", fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>
+                Undo
+              </button>
+            )}
+            <button onClick={() => setToastMsg(null)} aria-label="Dismiss" style={{ background: "transparent", border: "none", color: "#9FB5C5", cursor: "pointer", padding: 4, display: "inline-flex" }}><X size={14} /></button>
+          </div>
         </div>
       )}
     </div>

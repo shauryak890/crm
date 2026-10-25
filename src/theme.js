@@ -109,6 +109,37 @@ export const DELAY_REASONS = [
 // turn around, so we don't over-promise and run late.
 export const DAILY_CAPACITY = 250;
 
+// Today (or today + n days) as a LOCAL YYYY-MM-DD. toISOString() is UTC,
+// which in IST rolls back a day between midnight and 05:30.
+export const localIsoDate = (days = 0, from = new Date()) => {
+  const d = new Date(from);
+  d.setDate(d.getDate() + days);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+// Last 10 digits of a phone — '+91 87579 38961', '08757938961' and
+// '918757938961' all normalise to '8757938961'.
+export const normPhone = (s) => {
+  const digits = String(s || "").replace(/\D/g, "");
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+};
+// A usable Indian mobile: exactly 10 digits, optionally prefixed 0 / 91.
+export const isValidPhone = (s) => {
+  const d = String(s || "").replace(/\D/g, "");
+  return /^[6-9]\d{9}$/.test(d) || /^0[6-9]\d{9}$/.test(d) || /^91[6-9]\d{9}$/.test(d);
+};
+
+export const isCancelled = (o) => String(o?.order_status || "").toLowerCase() === "cancelled";
+export const isDelivered = (o) =>
+  String(o?.order_status || "").toLowerCase() === "delivered" || o?.delivery_status === "Delivered";
+
+// The date an order's collected money is attributed to. A fully paid
+// order counts on the day it was paid (orders are often billed unpaid and
+// settled at pickup); partial advances and legacy rows fall back to the
+// day the order was created.
+export const revenueDate = (o) => (o.payment_status === "Paid" && o.paid_at ? o.paid_at : o.created_at);
+
 // Money actually collected on an order. Fully-paid orders have collected
 // their whole total; "Partial" orders only the recorded advance; unpaid
 // orders nothing. A cancelled order (walk-in "Cancelled" or app-order
@@ -149,6 +180,21 @@ export function findOrdersByRef(orders, raw) {
 }
 
 export const inr = (n) => "₹" + Number(n || 0).toLocaleString("en-IN");
+
+// One date style everywhere: "25 Oct 2026", "25 Oct", "25 Oct, 16:52".
+// Date-only strings are read as local dates (see lib/period.js toDate).
+const asDate = (v) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(v + "T00:00:00") : new Date(v));
+export const fmtDate = (v) => (v ? asDate(v).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—");
+export const fmtDay = (v) => (v ? asDate(v).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) : "—");
+export const fmtDateTime = (v) => (v ? asDate(v).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
+
+// WhatsApp deep link for an Indian mobile (null when the number is unusable).
+export function waLink(phone, text = "") {
+  const d = String(phone || "").replace(/\D/g, "");
+  const ten = d.length >= 10 ? d.slice(-10) : "";
+  if (!/^[6-9]\d{9}$/.test(ten)) return null;
+  return `https://wa.me/91${ten}${text ? `?text=${encodeURIComponent(text)}` : ""}`;
+}
 
 export const STORE = {
   name: "Whites & Brights",

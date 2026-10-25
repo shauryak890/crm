@@ -1,183 +1,208 @@
 import React, { useMemo, useState } from "react";
 import {
-  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell,
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, Legend,
 } from "recharts";
-import { TrendingUp, Wallet, Users, ArrowUpRight, ArrowDownRight, FileText, FileSpreadsheet, CalendarRange } from "lucide-react";
-import { C, DISPLAY, inr, collected } from "../theme";
+import { FileText, FileSpreadsheet, ArrowUp, ArrowDown } from "lucide-react";
+import { C, DISPLAY, inr, localIsoDate, isCancelled } from "../theme";
 import { Card, PageHead, Btn } from "../components/ui";
-import { buildYearData, topServices } from "../lib/aggregate";
+import { PeriodStepper, usePeriod } from "../components/kit";
+import { topServices, revenueEvents, costEvents } from "../lib/aggregate";
+import { periodRange, periodLabel, previousPeriod, periodNoun, inPeriod, toDate } from "../lib/period";
 import { buildReportData, downloadReportPdf, downloadReportExcel } from "../lib/reportExport";
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
-const monthAgoIso = () => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10); };
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const CAT_COLOR = { Rent: C.navy, Salary: C.teal, Utilities: C.amber, Maintenance: C.green, General: "#8FA6B4", Supplies: C.tealMid };
 
-function CustomReport({ orders, expenses, outlets, isSuperAdmin }) {
-  const [from, setFrom] = useState(monthAgoIso);
-  const [to, setTo] = useState(todayIso);
-  const [busy, setBusy] = useState(false);
+// Chart buckets for a period: months for a year (or all time = by month
+// across the data), days for anything shorter. Each bucket carries the
+// sub-period it covers so clicking a bar can open exactly that slice.
+function buckets(period, revenue, costs) {
+  const r = periodRange(period);
+  let rows;
+  if (!r || period.mode === "year") {
+    const year = r ? r[0].getFullYear() : null;
+    if (year == null) {
+      const keys = Array.from(new Set([...revenue, ...costs].map((e) => localIsoDate(0, toDate(e.date)).slice(0, 7)))).sort().slice(-24);
+      rows = keys.map((k) => ({ label: MONTHS[+k.slice(5) - 1] + " " + k.slice(2, 4), sub: { mode: "month", anchor: k + "-01" }, key: k }));
+    } else {
+      rows = MONTHS.map((m, i) => ({ label: m, sub: { mode: "month", anchor: `${year}-${String(i + 1).padStart(2, "0")}-01` }, key: `${year}-${String(i + 1).padStart(2, "0")}` }));
+    }
+    const idx = new Map(rows.map((x, i) => [x.key, i]));
+    rows.forEach((x) => { x.sales = 0; x.exp = 0; });
+    revenue.forEach((e) => { const i = idx.get(localIsoDate(0, toDate(e.date)).slice(0, 7)); if (i != null) rows[i].sales += e.amount; });
+    costs.forEach((e) => { const i = idx.get(localIsoDate(0, toDate(e.date)).slice(0, 7)); if (i != null) rows[i].exp += e.amount; });
+  } else {
+    rows = [];
+    for (let d = new Date(r[0]); d < r[1]; d.setDate(d.getDate() + 1)) {
+      const k = localIsoDate(0, d);
+      rows.push({ label: String(d.getDate()), sub: { mode: "day", anchor: k }, key: k, sales: 0, exp: 0 });
+    }
+    const idx = new Map(rows.map((x, i) => [x.key, i]));
+    revenue.forEach((e) => { const i = idx.get(localIsoDate(0, toDate(e.date))); if (i != null) rows[i].sales += e.amount; });
+    costs.forEach((e) => { const i = idx.get(localIsoDate(0, toDate(e.date))); if (i != null) rows[i].exp += e.amount; });
+  }
+  rows.forEach((x) => { x.sales = Math.round(x.sales); x.exp = Math.round(x.exp); });
+  return rows;
+}
 
-  const invalid = !from || !to || from > to;
-  const data = useMemo(
-    () => (invalid ? null : buildReportData({ orders, expenses, outlets, from, to, isSuperAdmin })),
-    [orders, expenses, outlets, from, to, isSuperAdmin, invalid]
+function Delta({ cur, prev, invert, period }) {
+  if (!prev) return <span style={{ fontSize: 12, color: C.textFaint }}>no earlier data to compare</span>;
+  const d = ((cur - prev) / prev) * 100;
+  const good = invert ? d <= 0 : d >= 0;
+  return (
+    <span className="inline-flex items-center gap-1" style={{ fontSize: 12, fontWeight: 600, color: good ? C.green : C.red }}>
+      {d >= 0 ? <ArrowUp size={12} /> : <ArrowDown size={12} />}{Math.abs(d).toFixed(1)}% vs {periodNoun(period)} <span style={{ color: C.textFaint, fontWeight: 500 }}>({inr(prev)})</span>
+    </span>
   );
+}
 
+function Stat({ label, value, children, color = C.navy }) {
+  return (
+    <Card>
+      <p style={{ color: C.textMute, fontSize: 12.5, fontWeight: 600 }}>{label}</p>
+      <p style={{ fontFamily: DISPLAY, fontSize: 26, fontWeight: 800, color, marginTop: 6 }}>{value}</p>
+      <div style={{ marginTop: 8 }}>{children}</div>
+    </Card>
+  );
+}
+
+export default function Reports({ orders: allOrders, expenses: allExpenses, customers: allCustomers, orderItems,
+  outlets = [], isSuperAdmin = false, subscriptions: allSubs = [], supplyOrders: allSupply = [], go }) {
+  const [period, setPeriod] = usePeriod("reports", "month");
+  const [outletId, setOutletId] = useState(""); // super_admin filter, "" = all
+  const [busy, setBusy] = useState(false);
+  const byOutlet = (rows) => (outletId ? rows.filter((r) => r.outlet_id === outletId) : rows);
+  const orders = useMemo(() => byOutlet(allOrders), [allOrders, outletId]);           // eslint-disable-line react-hooks/exhaustive-deps
+  const expenses = useMemo(() => byOutlet(allExpenses), [allExpenses, outletId]);     // eslint-disable-line react-hooks/exhaustive-deps
+  const customers = useMemo(() => byOutlet(allCustomers), [allCustomers, outletId]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const subscriptions = useMemo(() => byOutlet(allSubs), [allSubs, outletId]);        // eslint-disable-line react-hooks/exhaustive-deps
+  const supplyOrders = useMemo(() => byOutlet(allSupply), [allSupply, outletId]);     // eslint-disable-line react-hooks/exhaustive-deps
+
+  const revenue = useMemo(() => revenueEvents(orders, subscriptions), [orders, subscriptions]);
+  const costs = useMemo(() => costEvents(expenses, supplyOrders), [expenses, supplyOrders]);
+  const prev = previousPeriod(period);
+  const sumIn = (ev, p) => (p ? ev.reduce((a, e) => (inPeriod(e.date, p) ? a + e.amount : a), 0) : 0);
+  const totalIn = sumIn(revenue, period), totalOut = sumIn(costs, period);
+  const prevIn = sumIn(revenue, prev), prevOut = sumIn(costs, prev);
+  const billed = orders.filter((o) => !isCancelled(o) && inPeriod(o.created_at, period));
+  const prevBilled = prev ? orders.filter((o) => !isCancelled(o) && inPeriod(o.created_at, prev)) : [];
+  const newCustomers = customers.filter((c) => inPeriod(c.created_at, period)).length;
+
+  const chartData = useMemo(() => buckets(period, revenue, costs), [period, revenue, costs]);
+
+  // Where the money went, by expense category (supplies included).
+  const costBreakdown = useMemo(() => {
+    const m = {};
+    expenses.filter((e) => inPeriod(e.spent_on, period)).forEach((e) => { m[e.category] = (m[e.category] || 0) + Number(e.amount || 0); });
+    const sup = costs.filter((e) => e.kind === "supplies" && inPeriod(e.date, period)).reduce((a, e) => a + e.amount, 0);
+    if (sup) m.Supplies = sup;
+    return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value: Math.round(value) }));
+  }, [expenses, costs, period]);
+
+  const pie = useMemo(() => {
+    const keep = new Set(billed.map((o) => o.id));
+    return topServices(orderItems.filter((i) => keep.has(i.order_id)));
+  }, [billed, orderItems]);
+
+  // Export the selected period (all time = from the first record).
+  const range = periodRange(period);
+  const from = range ? localIsoDate(0, range[0]) : (orders.reduce((m, o) => (!m || o.created_at < m ? o.created_at : m), null) || localIsoDate()).slice(0, 10);
+  const to = range ? localIsoDate(-1, range[1]) : localIsoDate();
   const run = (fn) => {
-    if (!data || busy) return;
+    if (busy) return;
     setBusy(true);
-    try { fn(data); } finally { setBusy(false); }
+    try { fn(buildReportData({ orders, expenses, outlets, from, to, isSuperAdmin, subscriptions, supplyOrders, customers })); }
+    finally { setBusy(false); }
   };
 
   return (
-    <Card style={{ marginBottom: 18 }}>
-      <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
-        <CalendarRange size={17} color={C.tealDark} />
-        <h3 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 16, color: C.navy }}>Custom Report</h3>
-      </div>
-      <p style={{ color: C.textMute, fontSize: 12.5, marginBottom: 16 }}>Pick a date range and download every sale and expense in it — day by day, with totals.</p>
-
-      <div className="flex items-end gap-3 flex-wrap">
-        <div>
-          <label style={{ fontSize: 11.5, fontWeight: 600, color: C.navy, marginBottom: 6, display: "block" }}>From</label>
-          <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)}
-            style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 11px", fontSize: 13, outline: "none" }} />
-        </div>
-        <div>
-          <label style={{ fontSize: 11.5, fontWeight: 600, color: C.navy, marginBottom: 6, display: "block" }}>To</label>
-          <input type="date" value={to} min={from} max={todayIso()} onChange={(e) => setTo(e.target.value)}
-            style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 11px", fontSize: 13, outline: "none" }} />
-        </div>
-        <Btn variant="navy" icon={FileText} small disabled={!data || busy} onClick={() => run(downloadReportPdf)}>Download PDF</Btn>
-        <Btn variant="primary" icon={FileSpreadsheet} small disabled={!data || busy} onClick={() => run(downloadReportExcel)}>Download Excel (CSV)</Btn>
-      </div>
-
-      {invalid ? (
-        <p style={{ color: C.red, fontSize: 12, marginTop: 12 }}>Pick a valid range — "From" must be on or before "To".</p>
-      ) : (
-        <div className="flex items-center gap-5 flex-wrap" style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.borderSoft}` }}>
-          <span style={{ fontSize: 12.5, color: C.textMute }}>{data.summary.orderCount} orders</span>
-          <span style={{ fontSize: 12.5, color: C.green, fontWeight: 700 }}>{inr(data.summary.totalSales)} sales</span>
-          <span style={{ fontSize: 12.5, color: C.red, fontWeight: 700 }}>{inr(data.summary.totalExpenses)} expenses</span>
-          <span style={{ fontSize: 12.5, color: C.navy, fontWeight: 700 }}>{inr(data.summary.netProfit)} net</span>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-// Same 12-row {m, sales, exp} shape, sliced down to the current month only
-// for the "Monthly" view — the underlying data is identical either way.
-function monthSlice(year) {
-  const m = new Date().getMonth();
-  return [year[m]];
-}
-
-function Stat({ label, value, icon: Icon, sub, tone }) {
-  return (
-    <Card>
-      <div className="flex items-start justify-between">
-        <div>
-          <p style={{ color: C.textMute, fontSize: 12.5, fontWeight: 600 }}>{label}</p>
-          <p style={{ fontFamily: DISPLAY, fontSize: 27, fontWeight: 800, color: C.navy, marginTop: 8 }}>{value}</p>
-        </div>
-        <div className="flex items-center justify-center rounded-xl" style={{ width: 44, height: 44, background: C.tealLight }}>
-          <Icon size={21} color={C.tealDark} />
-        </div>
-      </div>
-      {sub && (
-        <div className="flex items-center gap-1.5" style={{ marginTop: 14 }}>
-          {tone === "up" ? <ArrowUpRight size={15} color={C.green} /> : <ArrowDownRight size={15} color={C.red} />}
-          <span style={{ fontSize: 12.5, fontWeight: 700, color: tone === "up" ? C.green : C.red }}>{sub}</span>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-export default function Reports({ orders, expenses, customers, orderItems, outlets = [], isSuperAdmin = false }) {
-  const [range, setRange] = useState("year"); // 'month' | 'year'
-  const year = buildYearData(orders, expenses);
-  const chartData = useMemo(() => (range === "month" ? monthSlice(year) : year), [range, year]);
-  const totalSales = orders.reduce((a, o) => a + collected(o), 0);
-  const totalExp = expenses.reduce((a, e) => a + Number(e.amount), 0);
-  const pie = topServices(orderItems);
-
-  return (
     <div>
-      <PageHead title="Reports" sub="Outlet performance overview" />
-      <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", marginBottom: 18 }}>
-        <Stat label={`Total Sales (${new Date().getFullYear()})`} value={inr(totalSales)} icon={TrendingUp} sub="paid invoices" tone="up" />
-        <Stat label="Total Expenses" value={inr(totalExp)} icon={Wallet} sub="recorded" tone="down" />
-        <Stat label="Customers" value={customers.length} icon={Users} sub="on file" tone="up" />
+      <PageHead title="Reports" sub={`${periodLabel(period)}${outletId ? ` · ${outlets.find((o) => o.id === outletId)?.name}` : ""}`}>
+        {isSuperAdmin && (
+          <select value={outletId} onChange={(e) => setOutletId(e.target.value)}
+            style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 11, padding: "8px 12px", fontSize: 12.5, fontWeight: 600, color: C.navy }}>
+            <option value="">All outlets</option>
+            {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+        )}
+        <PeriodStepper value={period} onChange={setPeriod} modes={["week", "month", "year", "all", "custom"]} />
+        <Btn variant="navy" icon={FileText} small disabled={busy} onClick={() => run(downloadReportPdf)}>PDF</Btn>
+        <Btn variant="primary" icon={FileSpreadsheet} small disabled={busy} onClick={() => run(downloadReportExcel)}>Excel (CSV)</Btn>
+      </PageHead>
+
+      <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", marginBottom: 18 }}>
+        <Stat label="Collected" value={inr(totalIn)} color={C.green}><Delta cur={totalIn} prev={prevIn} period={period} /></Stat>
+        <Stat label="Expenses & supplies" value={inr(totalOut)} color={C.red}><Delta cur={totalOut} prev={prevOut} invert period={period} /></Stat>
+        <Stat label="Net" value={inr(totalIn - totalOut)} color={totalIn - totalOut >= 0 ? C.navy : C.red}><Delta cur={totalIn - totalOut} prev={prevIn - prevOut} period={period} /></Stat>
+        <Stat label="Orders billed" value={billed.length}>
+          <span style={{ fontSize: 12, color: C.textMute }}>{prevBilled.length ? `${prevBilled.length} in ${periodNoun(period)} · ` : ""}{newCustomers} new customer{newCustomers === 1 ? "" : "s"}</span>
+        </Stat>
       </div>
 
-      <CustomReport orders={orders} expenses={expenses} outlets={outlets} isSuperAdmin={isSuperAdmin} />
+      <Card style={{ marginBottom: 18 }}>
+        <div className="flex items-center justify-between flex-wrap gap-2" style={{ marginBottom: 12 }}>
+          <h3 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 16, color: C.navy }}>Money in vs out · {periodLabel(period)}</h3>
+          {go && <span style={{ fontSize: 12, color: C.textFaint }}>Click a bar to open those sales</span>}
+        </div>
+        <div style={{ height: 300 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} margin={{ left: -8, right: 8, top: 6 }} barGap={2}
+              onClick={(s) => { const row = s?.activePayload?.[0]?.payload; if (row && go) go("sales", { period: row.sub }); }}
+              style={{ cursor: go ? "pointer" : "default" }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F5" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: C.textFaint }} axisLine={false} tickLine={false} interval={chartData.length > 16 ? 2 : 0} />
+              <YAxis tick={{ fontSize: 11, fill: C.textFaint }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={{ borderRadius: 12, border: `1px solid ${C.border}`, fontSize: 12.5 }} formatter={(v) => inr(v)} cursor={{ fill: C.tealSoft }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="sales" name="Collected" fill={C.teal} radius={[5, 5, 0, 0]} />
+              <Bar dataKey="exp" name="Expenses" fill={C.amber} radius={[5, 5, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
 
-      <div className="grid gap-4" style={{ gridTemplateColumns: "minmax(0,1.4fr) minmax(0,1fr)" }}>
+      <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
         <Card>
-          <div className="flex items-center justify-between flex-wrap gap-2" style={{ marginBottom: 16 }}>
-            <h3 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 16, color: C.navy }}>
-              Sales & Expenses — {range === "month" ? new Date().toLocaleDateString("en-GB", { month: "long", year: "numeric" }) : new Date().getFullYear()}
-            </h3>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1.5">
-                <span style={{ width: 9, height: 9, borderRadius: 3, background: C.teal, display: "inline-block" }} />
-                <span style={{ fontSize: 11.5, color: C.textMute, fontWeight: 600 }}>Sales</span>
-                <span style={{ width: 9, height: 9, borderRadius: 3, background: C.amber, display: "inline-block", marginLeft: 8 }} />
-                <span style={{ fontSize: 11.5, color: C.textMute, fontWeight: 600 }}>Expenses</span>
-              </div>
-              <div className="flex items-center" style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 9, padding: 2 }}>
-                {[["month", "Monthly"], ["year", "Yearly"]].map(([k, label]) => (
-                  <button key={k} onClick={() => setRange(k)}
-                    style={{
-                      border: "none", cursor: "pointer", padding: "5px 11px", borderRadius: 7,
-                      fontSize: 11.5, fontWeight: 600,
-                      background: range === k ? C.navy : "transparent",
-                      color: range === k ? "#fff" : C.textMute,
-                    }}>{label}</button>
-                ))}
-              </div>
+          <h3 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 16, color: C.navy, marginBottom: 12 }}>Where the money went</h3>
+          {costBreakdown.length === 0 ? <p style={{ color: C.textFaint, fontSize: 13, padding: "30px 0", textAlign: "center" }}>No expenses in this period.</p> : (
+            <div className="flex flex-col gap-3">
+              {costBreakdown.map((r) => (
+                <button key={r.name} onClick={() => go && r.name !== "Supplies" && go("expenses", { category: r.name })}
+                  style={{ border: "none", background: "none", padding: 0, textAlign: "left", cursor: go && r.name !== "Supplies" ? "pointer" : "default" }}>
+                  <div className="flex justify-between" style={{ fontSize: 12.5, marginBottom: 5 }}>
+                    <span style={{ color: C.text, fontWeight: 500 }}>{r.name}</span>
+                    <span style={{ color: C.navy, fontWeight: 700 }}>{inr(r.value)} <span style={{ color: C.textFaint, fontWeight: 500 }}>· {totalOut ? Math.round((r.value / totalOut) * 100) : 0}%</span></span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 99, background: C.bg, overflow: "hidden" }}>
+                    <div style={{ width: `${totalOut ? (r.value / totalOut) * 100 : 0}%`, height: "100%", background: CAT_COLOR[r.name] || C.textFaint, borderRadius: 99 }} />
+                  </div>
+                </button>
+              ))}
             </div>
-          </div>
-          <div style={{ height: 300 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ left: -12, right: 8, top: 6 }}>
-                <defs>
-                  <linearGradient id="rs" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={C.teal} stopOpacity={0.3} /><stop offset="100%" stopColor={C.teal} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#EDF2F5" vertical={false} />
-                <XAxis dataKey="m" tick={{ fontSize: 11, fill: C.textFaint }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: C.textFaint }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ borderRadius: 12, border: `1px solid ${C.border}`, fontSize: 12.5 }} formatter={(v) => inr(v)} />
-                <Area type="monotone" dataKey="sales" stroke={C.teal} strokeWidth={2.6} fill="url(#rs)" name="Sales" />
-                <Area type="monotone" dataKey="exp" stroke={C.amber} strokeWidth={2.2} fill="none" name="Expenses" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          )}
         </Card>
         <Card>
-          <h3 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 16, color: C.navy, marginBottom: 12 }}>Most Requested Services</h3>
+          <h3 style={{ fontFamily: DISPLAY, fontWeight: 800, fontSize: 16, color: C.navy, marginBottom: 12 }}>Most requested services</h3>
           {pie.length === 0 ? (
-            <div style={{ height: 240, display: "flex", alignItems: "center", justifyContent: "center", color: C.textFaint, fontSize: 13 }}>No sales recorded yet.</div>
+            <div style={{ height: 240, display: "flex", alignItems: "center", justifyContent: "center", color: C.textFaint, fontSize: 13 }}>No sales in this period.</div>
           ) : (
             <>
-              <div style={{ height: 210 }}>
+              <div style={{ height: 200 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={pie} dataKey="value" nameKey="name" innerRadius={48} outerRadius={92} paddingAngle={1.5}>
+                    <Pie data={pie} dataKey="value" nameKey="name" innerRadius={48} outerRadius={88} paddingAngle={1.5}>
                       {pie.map((e, i) => <Cell key={i} fill={e.color} stroke="#fff" strokeWidth={2} />)}
                     </Pie>
-                    <Tooltip contentStyle={{ borderRadius: 12, border: `1px solid ${C.border}`, fontSize: 12.5 }} />
+                    <Tooltip contentStyle={{ borderRadius: 12, border: `1px solid ${C.border}`, fontSize: 12.5 }} formatter={(v) => `${v} pcs`} />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
               <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
-                {pie.slice(0, 6).map((e) => (
-                  <div key={e.name} className="flex items-center gap-2">
-                    <span style={{ width: 9, height: 9, borderRadius: 3, background: e.color }} />
+                {pie.slice(0, 8).map((e) => (
+                  <div key={e.name} className="flex items-center gap-2" style={{ minWidth: 0 }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 3, background: e.color, flexShrink: 0 }} />
                     <span style={{ fontSize: 11.5, color: C.textMute, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{e.name}</span>
+                    <span style={{ fontSize: 11.5, color: C.navy, fontWeight: 700, marginLeft: "auto" }}>{e.value}</span>
                   </div>
                 ))}
               </div>

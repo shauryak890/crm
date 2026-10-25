@@ -111,10 +111,31 @@ export const iconBtn = (bg, fg) => ({ width: 36, height: 36, borderRadius: 10, b
 export const field = { width: "100%", border: `1px solid ${C.border}`, borderRadius: 11, padding: "11px 14px", fontSize: 14, outline: "none", color: C.text, background: "#fff", transition: "border-color .2s var(--ease), box-shadow .2s var(--ease)" };
 export const fieldLabel = { fontSize: 12.5, fontWeight: 600, color: C.navy, marginBottom: 6, display: "block" };
 
+// Page buttons to show: first, last, and a window around the current
+// page, with "…" for the gaps — e.g. 1 … 4 5 6 … 79.
+function pageList(cur, pages) {
+  const want = new Set([1, pages, cur - 1, cur, cur + 1].filter((p) => p >= 1 && p <= pages));
+  const sorted = [...want].sort((a, b) => a - b);
+  const out = [];
+  sorted.forEach((p, i) => { if (i && p - sorted[i - 1] > 1) out.push("…"); out.push(p); });
+  return out;
+}
+
 /* Searchable, paginated table ------------------------------------- */
-export function DataTable({ columns, data, searchKeys, renderRow, placeholder = "Search…", defaultEntries = 10, loading }) {
-  const [q, setQ] = useState("");
-  const [entries, setEntries] = useState(defaultEntries);
+// Optional extras:
+//   toolbar      — node rendered above the table (filter chips etc.)
+//   footer(rows) — render prop given the search-filtered rows (totals)
+//   groupBy(row) — key; a header row is inserted whenever it changes
+//   renderGroup(key, rowsInGroup) — that header's content
+//   emptyText    — message when nothing matches
+export function DataTable({ columns, data, searchKeys, renderRow, placeholder = "Search…", defaultEntries = 10, loading, initialQuery = "",
+  toolbar, footer, groupBy, renderGroup, emptyText = "No records yet.", entriesKey }) {
+  const [q, setQ] = useState(initialQuery);
+  // The page size is remembered per table when `entriesKey` is given.
+  const [entries, setEntriesState] = useState(() => {
+    try { return Number(entriesKey && localStorage.getItem("wb:entries:" + entriesKey)) || defaultEntries; } catch { return defaultEntries; }
+  });
+  const setEntries = (n) => { setEntriesState(n); try { entriesKey && localStorage.setItem("wb:entries:" + entriesKey, String(n)); } catch { /* blocked */ } };
   const [page, setPage] = useState(1);
 
   // A search key is a field name, or a function for a derived value
@@ -128,6 +149,34 @@ export function DataTable({ columns, data, searchKeys, renderRow, placeholder = 
   const cur = Math.min(page, pages);
   const start = (cur - 1) * entries;
   const shown = filtered.slice(start, start + entries);
+
+  // Group headers: subtotal rows are computed over ALL filtered rows in the
+  // group (not just this page's slice), so a day split across pages still
+  // shows its full total.
+  const groups = useMemo(() => {
+    if (!groupBy) return null;
+    const m = new Map();
+    filtered.forEach((r) => { const k = groupBy(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
+    return m;
+  }, [filtered, groupBy]);
+  const body = [];
+  let lastKey;
+  shown.forEach((r, i) => {
+    if (groups) {
+      const k = groupBy(r);
+      if (i === 0 || k !== lastKey) {
+        body.push(
+          <tr key={"g:" + k + ":" + i} style={{ background: C.paper }}>
+            <td colSpan={columns.length} style={{ padding: "9px 18px", borderBottom: `1px solid ${C.borderSoft}`, borderTop: i ? `1px solid ${C.border}` : "none" }}>
+              {renderGroup ? renderGroup(k, groups.get(k) || []) : k}
+            </td>
+          </tr>
+        );
+        lastKey = k;
+      }
+    }
+    body.push(renderRow(r));
+  });
 
   return (
     <Card pad={false}>
@@ -146,6 +195,7 @@ export function DataTable({ columns, data, searchKeys, renderRow, placeholder = 
             style={{ border: "none", outline: "none", fontSize: 13.5, color: C.text, width: "100%", background: "transparent" }} />
         </div>
       </div>
+      {toolbar && <div style={{ padding: "12px 20px", borderBottom: `1px solid ${C.borderSoft}` }}>{toolbar}</div>}
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
           <thead>
@@ -157,19 +207,32 @@ export function DataTable({ columns, data, searchKeys, renderRow, placeholder = 
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={columns.length} style={{ ...td, textAlign: "center", padding: "40px 0", color: C.textFaint }}>Loading…</td></tr>
+              Array.from({ length: 6 }, (_, r) => (
+                <tr key={"sk" + r}>{columns.map((c, ci) => (
+                  <td key={ci} style={{ padding: "16px 18px", borderBottom: `1px solid ${C.borderSoft}` }}>
+                    <div className="wb-skel" style={{ height: 12, width: `${45 + ((r * 7 + ci * 13) % 45)}%` }} />
+                  </td>
+                ))}</tr>
+              ))
             ) : shown.length === 0 ? (
-              <tr><td colSpan={columns.length} style={{ ...td, textAlign: "center", padding: "40px 0", color: C.textFaint }}>No records yet.</td></tr>
-            ) : shown.map(renderRow)}
+              <tr><td colSpan={columns.length} style={{ ...td, textAlign: "center", padding: "40px 0", color: C.textFaint }}>{q ? `Nothing matches "${q}".` : emptyText}</td></tr>
+            ) : body}
           </tbody>
         </table>
       </div>
+      {footer && !loading && filtered.length > 0 && (
+        <div style={{ padding: "12px 20px", borderTop: `1px solid ${C.border}`, background: C.paper }}>{footer(filtered)}</div>
+      )}
       <div className="flex items-center justify-between flex-wrap gap-3" style={{ padding: "14px 20px", borderTop: `1px solid ${C.borderSoft}`, fontSize: 13, color: C.textMute }}>
         <span>Showing {shown.length ? start + 1 : 0} to {start + shown.length} of {filtered.length} entries</span>
         <div className="flex items-center gap-2">
           <button onClick={() => setPage((p) => Math.max(1, p - 1))}
             style={{ border: `1px solid ${C.border}`, borderRadius: 9, padding: "6px 12px", fontSize: 12.5, fontWeight: 600, color: cur === 1 ? C.textFaint : C.navy, background: "#fff", cursor: "pointer" }}>Previous</button>
-          <span style={{ border: "none", borderRadius: 9, padding: "6px 12px", fontSize: 12.5, fontWeight: 700, color: "#fff", background: C.teal }}>{cur}</span>
+          {pageList(cur, pages).map((p, i) => p === "…"
+            ? <span key={"gap" + i} style={{ color: C.textFaint, padding: "0 2px" }}>…</span>
+            : <button key={p} onClick={() => setPage(p)}
+                style={{ border: p === cur ? "none" : `1px solid ${C.border}`, borderRadius: 9, padding: "6px 11px", fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                  color: p === cur ? "#fff" : C.navy, background: p === cur ? C.teal : "#fff" }}>{p}</button>)}
           <button onClick={() => setPage((p) => Math.min(pages, p + 1))}
             style={{ border: `1px solid ${C.border}`, borderRadius: 9, padding: "6px 12px", fontSize: 12.5, fontWeight: 600, color: cur === pages ? C.textFaint : C.navy, background: "#fff", cursor: "pointer" }}>Next</button>
         </div>
@@ -179,7 +242,42 @@ export function DataTable({ columns, data, searchKeys, renderRow, placeholder = 
 }
 
 /* Modal shell ----------------------------------------------------- */
+// Print the current page (not an invoice): see body.wb-print-page in
+// index.css. The class is removed once the print dialog closes.
+export function printPage() {
+  document.body.classList.add("wb-print-page");
+  const done = () => { document.body.classList.remove("wb-print-page"); window.removeEventListener("afterprint", done); };
+  window.addEventListener("afterprint", done);
+  window.print();
+  setTimeout(done, 1000); // browsers that block until the dialog closes / never fire afterprint
+}
+
+// Close the top-most open dialog on Escape. Each dialog registers on mount;
+// only the latest one reacts, so a nested modal closes before its parent.
+const escStack = [];
+export function useEscape(onClose, enabled = true) {
+  const ref = React.useRef(onClose);
+  ref.current = onClose;
+  React.useEffect(() => {
+    if (!enabled) return;
+    const entry = () => ref.current && ref.current();
+    escStack.push(entry);
+    const onKey = (e) => {
+      if (e.key === "Escape" && escStack[escStack.length - 1] === entry) { e.stopPropagation(); entry(); }
+    };
+    // Capture phase + stopPropagation so App's focus-mode Escape handler
+    // doesn't also fire when all the user meant was "close this dialog".
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      const i = escStack.indexOf(entry);
+      if (i >= 0) escStack.splice(i, 1);
+    };
+  }, [enabled]);
+}
+
 export function Modal({ title, sub, onClose, children, width = 480 }) {
+  useEscape(onClose);
   return (
     <div className="wb-fade-in flex items-center justify-center" style={{ position: "fixed", inset: 0, background: "rgba(15,42,59,.4)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)", zIndex: 50, padding: 16 }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} className="wb-modal-in"

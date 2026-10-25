@@ -22,8 +22,9 @@ export default function Users({ profiles, loading, onRefresh, toast, outlets = [
   // System Users lists outlet STAFF only. Super-admins (corporate) are
   // hidden by RLS + this backstop; app customers also live in `profiles`
   // (role='customer', no outlet) and must never appear in the staff list.
+  // Drivers are managed under Live Tracking, not as CRM logins.
   const visibleProfiles = profiles.filter(
-    (p) => p.role !== "super_admin" && p.role !== "customer"
+    (p) => p.role !== "super_admin" && p.role !== "customer" && p.role !== "driver"
   );
 
   const save = async () => {

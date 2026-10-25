@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { Search, Plus, Minus, Trash2, Send, PackagePlus, X, Clock, CheckCircle2 } from "lucide-react";
-import { C, inr } from "../theme";
+import { C, inr, fmtDate } from "../theme";
 import * as api from "../lib/api";
 import { PageHead, Card, Btn, Badge, IconCircle } from "../components/ui";
 
 const STATUS_TONE = { requested: "warn", approved: "info", dispatched: "info", received: "success", cancelled: "danger" };
 const STATUS_LABEL = { requested: "Requested", approved: "Approved by HQ", dispatched: "Dispatched", received: "Received", cancelled: "Cancelled" };
 
-export default function Supplies({ profile, isSuperAdmin, outlets = [], billingOutletId, setBillingOutletId, toast }) {
+export default function Supplies({ profile, isSuperAdmin, outlets = [], billingOutletId, setBillingOutletId, toast, onChanged }) {
   const [items, setItems] = useState([]);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17,22 +17,42 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [history, setHistory] = useState([]); // [{ id, lines }], newest first
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const [it, ord] = await Promise.all([api.fetchSupplyItems(), api.fetchSupplyOrders()]);
       setItems(it); setOrders(ord);
+      // Line items of the last 10 (non-cancelled) orders — for "repeat last
+      // order" and to float the usual items to the top of the list.
+      const recent = ord.filter((o) => o.status !== "cancelled").slice(0, 10);
+      const lines = await Promise.all(recent.map((o) => api.fetchSupplyOrderItems(o.id).then((l) => ({ id: o.id, lines: l })).catch(() => ({ id: o.id, lines: [] }))));
+      setHistory(lines);
     } catch (e) { toast && toast("Load error: " + e.message); }
     setLoading(false);
   }, [toast]);
   useEffect(() => { load(); }, [load]);
 
   const categories = useMemo(() => ["All", ...Array.from(new Set(items.map((i) => i.category))).sort()], [items]);
+  // How often each item appears in recent orders → usual items first.
+  const freq = useMemo(() => {
+    const m = new Map();
+    history.forEach((h) => h.lines.forEach((l) => m.set(l.item_name, (m.get(l.item_name) || 0) + 1)));
+    return m;
+  }, [history]);
   const visible = items.filter((i) =>
     (category === "All" || i.category === category) &&
     i.name.toLowerCase().includes(search.toLowerCase())
-  );
+  ).sort((a, b) => (freq.get(b.name) || 0) - (freq.get(a.name) || 0));
+  const lastOrder = history.find((h) => h.lines.length);
+  const repeatLast = () => {
+    if (!lastOrder) return;
+    const byName = new Map(items.map((i) => [i.name, i]));
+    const next = {};
+    lastOrder.lines.forEach((l) => { const it = byName.get(l.item_name); if (it) next[it.id] = Number(l.qty) || 1; });
+    setCart(next);
+  };
 
   // Chemicals are quoted by HQ at order time, so their rates are never
   // shown to the outlet — only packaging carries a visible price.
@@ -54,6 +74,12 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
     if (cartLines.length === 0) { setErr("Add at least one item to reorder."); return; }
     const outletId = isSuperAdmin ? billingOutletId : null;
     if (isSuperAdmin && !outletId) { setErr("Pick which outlet this order is for."); return; }
+    // The outlet picker is shared with POS / Subscriptions, so a value set
+    // there silently carries over here — confirm before filing the order.
+    if (isSuperAdmin) {
+      const name = outlets.find((o) => o.id === outletId)?.name || "the selected outlet";
+      if (!confirm(`Send this ${cartLines.length}-item reorder for ${name}?`)) return;
+    }
     setBusy(true);
     try {
       await api.createSupplyOrder({
@@ -141,7 +167,15 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
         {/* Cart / submit */}
         <Card pad={false} style={{ display: "flex", flexDirection: "column", maxHeight: "calc(100vh - 200px)" }}>
           <div style={{ padding: "16px 18px", borderBottom: `1px solid ${C.borderSoft}` }}>
-            <h3 style={{ fontWeight: 700, fontSize: 15, color: C.navy }}>Your reorder · {cartLines.length} item{cartLines.length === 1 ? "" : "s"}</h3>
+            <div className="flex items-center justify-between gap-2">
+              <h3 style={{ fontWeight: 700, fontSize: 15, color: C.navy }}>Your reorder · {cartLines.length} item{cartLines.length === 1 ? "" : "s"}</h3>
+              {lastOrder && (
+                <button onClick={repeatLast} title={`Fill the cart with supply order #${orders.find((o) => o.id === lastOrder.id)?.order_no || ""}`}
+                  style={{ border: `1px solid ${C.border}`, background: "#fff", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 600, color: C.tealDark, cursor: "pointer" }}>
+                  ↻ Repeat last order
+                </button>
+              )}
+            </div>
           </div>
           <div style={{ flex: 1, overflowY: "auto" }}>
             {cartLines.length === 0 ? (
@@ -201,7 +235,7 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
                       <Badge tone={STATUS_TONE[o.status] || "muted"}>{STATUS_LABEL[o.status] || o.status}</Badge>
                     </div>
                     <p style={{ fontSize: 12, color: C.textFaint, marginTop: 2 }}>
-                      {isSuperAdmin && o.outlet ? `${o.outlet.name} · ` : ""}{new Date(o.created_at).toLocaleDateString("en-GB")}{o.requester ? ` · ${o.requester}` : ""}
+                      {isSuperAdmin && o.outlet ? `${o.outlet.name} · ` : ""}{fmtDate(o.created_at)}{o.requester ? ` · ${o.requester}` : ""}
                     </p>
                     {o.note && <p style={{ fontSize: 12, color: C.textMute, marginTop: 3, fontStyle: "italic" }}>"{o.note}"</p>}
                     {o.hq_note && <p style={{ fontSize: 12, color: C.tealDark, marginTop: 3 }}>HQ: {o.hq_note}</p>}
@@ -213,6 +247,12 @@ export default function Supplies({ profile, isSuperAdmin, outlets = [], billingO
                   </span>
                   {o.status === "requested" && !isSuperAdmin && (
                     <Btn variant="danger" small icon={X} onClick={() => cancelOrder(o)}>Cancel</Btn>
+                  )}
+                  {o.status === "dispatched" && (
+                    <Btn variant="success" small icon={CheckCircle2} onClick={async () => {
+                      try { await api.updateSupplyOrderStatus(o.id, "received"); toast && toast(`Supply #${o.order_no} marked received`); await load(); onChanged && onChanged(); }
+                      catch (e) { toast && toast("Could not update: " + e.message); }
+                    }}>Mark received</Btn>
                   )}
                 </div>
               </div>

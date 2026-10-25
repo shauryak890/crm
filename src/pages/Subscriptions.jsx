@@ -1,6 +1,17 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Search, Plus, Pencil, X, ShieldCheck, Clock, Ban, MessageCircle } from "lucide-react";
-import { C, inr, STORE } from "../theme";
+import { C, inr, STORE, localIsoDate, waLink } from "../theme";
+import { FilterChips } from "../components/kit";
+
+// Renewal nudge — wording depends on whether the plan is running low,
+// about to expire, or already finished.
+function renewalMessage(c, s, status) {
+  const left = Math.max(0, Number(s.weight_limit_kg) - Number(s.weight_used_kg)).toFixed(1);
+  const why = status !== "active" ? `Your *${s.plan_name}* plan has ended.`
+    : Number(left) < 2 ? `Your *${s.plan_name}* plan has only *${left} kg* left.`
+    : `Your *${s.plan_name}* plan expires on *${fmtDate(s.expires_at)}* (${left} kg left).`;
+  return [`*${STORE.name}*`, `Dear ${c.first_name},`, ``, why, `Renew at the counter to keep your free washes going.`, ``, `— Team ${STORE.name}`].join("\n");
+}
 import * as api from "../lib/api";
 import { PageHead, Card, Btn, Badge, Modal, field, fieldLabel } from "../components/ui";
 
@@ -53,7 +64,7 @@ const effectiveKg = (p) => {
   return Math.round(base * (1 + bonus / 100) * 100) / 100;
 };
 
-export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customers = [], outlets = [], billingOutletId, setBillingOutletId, toast, onRefresh }) {
+export default function Subscriptions({ intent, profile, isAdmin, isSuperAdmin, customers = [], outlets = [], billingOutletId, setBillingOutletId, toast, onRefresh }) {
   const [plans, setPlans] = useState([]);
   const [subs, setSubs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -90,9 +101,35 @@ export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customer
     return m;
   }, [subs]);
 
-  const visibleCustomers = customers.filter((c) =>
-    `${c.first_name} ${c.last_name} ${c.phone}`.toLowerCase().includes(search.toLowerCase())
-  );
+  // Plan holders first (active → soonest expiry), then everyone else.
+  // "All customers" is capped so 300+ rows don't render at once — the
+  // search box finds anyone beyond the cap.
+  const [show, setShow] = useState(intent?.chip || "active");
+  const LIMIT = 50;
+  const in7 = localIsoDate(7);
+  const remainingKg = (s) => Math.max(0, Number(s.weight_limit_kg) - Number(s.weight_used_kg));
+  // Filters over each customer's latest subscription.
+  const TESTS = {
+    active: (s) => s && effectiveStatus(s) === "active",
+    expiring: (s) => s && effectiveStatus(s) === "active" && String(s.expires_at).slice(0, 10) <= in7,
+    low: (s) => s && effectiveStatus(s) === "active" && remainingKg(s) < 2,
+    ended: (s) => s && effectiveStatus(s) !== "active",
+    all: () => true,
+  };
+  const rank = (c) => {
+    const s = subByCustomer[c.id];
+    if (!s) return [3, 0];
+    const st = effectiveStatus(s);
+    return [st === "active" ? 0 : st === "exhausted" ? 1 : 2, new Date(s.expires_at).getTime()];
+  };
+  const term = search.trim().toLowerCase();
+  const matching = customers
+    .filter((c) => (term ? true : (TESTS[show] || TESTS.all)(subByCustomer[c.id]))
+      && (!isSuperAdmin || !billingOutletId || c.outlet_id === billingOutletId)
+      && `${c.first_name} ${c.last_name} ${c.phone}`.toLowerCase().includes(term))
+    .sort((a, b) => { const [ra, ea] = rank(a), [rb, eb] = rank(b); return ra - rb || ea - eb; });
+  const visibleCustomers = matching.slice(0, LIMIT);
+  const planHolders = customers.filter((c) => subByCustomer[c.id] && effectiveStatus(subByCustomer[c.id]) === "active").length;
 
   /* ── Plan editor (admin only) ────────────────────────────────────── */
   const openAddPlan = () => { setPlanForm(blankPlanForm()); setPlanModal({}); };
@@ -126,7 +163,9 @@ export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customer
   /* ── Sell a plan to a customer ───────────────────────────────────── */
   const sell = async (plan, notify = true) => {
     setErr("");
-    const outletId = isSuperAdmin ? billingOutletId : null;
+    // A plan belongs with its customer: file it under the customer's own
+    // outlet rather than whatever the shared outlet picker happens to say.
+    const outletId = isSuperAdmin ? (sellFor.outlet_id || billingOutletId) : null;
     if (isSuperAdmin && !outletId) { setErr("Pick which outlet this sale is for."); return; }
     setSellBusy(true);
     try {
@@ -205,13 +244,22 @@ export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customer
       </div>
 
       {/* Customer subscription directory */}
-      <h3 style={{ fontWeight: 700, fontSize: 15, color: C.navy, marginBottom: 12 }}>Customer subscriptions</h3>
+      <h3 style={{ fontWeight: 700, fontSize: 15, color: C.navy, marginBottom: 12 }}>Customer subscriptions <span style={{ color: C.textMute, fontWeight: 600, fontSize: 13 }}>· {planHolders} active</span></h3>
       <Card pad={false}>
-        <div style={{ padding: 14, borderBottom: `1px solid ${C.borderSoft}` }}>
-          <div className="flex items-center gap-2 rounded-xl" style={{ border: `1px solid ${C.border}`, padding: "9px 12px", maxWidth: 340 }}>
+        <div className="flex items-center gap-3 flex-wrap" style={{ padding: 14, borderBottom: `1px solid ${C.borderSoft}` }}>
+          <div className="flex items-center gap-2 rounded-xl" style={{ border: `1px solid ${C.border}`, padding: "9px 12px", maxWidth: 340, flex: 1 }}>
             <Search size={15} color={C.textFaint} />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find a customer…" style={{ border: "none", outline: "none", fontSize: 13.5, width: "100%", background: "transparent" }} />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find any customer to sell a plan…" style={{ border: "none", outline: "none", fontSize: 13.5, width: "100%", background: "transparent" }} />
           </div>
+
+          <FilterChips value={show} onChange={setShow} chips={[
+            { key: "active", label: "Active", count: customers.filter((c) => TESTS.active(subByCustomer[c.id])).length },
+            { key: "expiring", label: "Expiring this week", tone: "warn", count: customers.filter((c) => TESTS.expiring(subByCustomer[c.id])).length },
+            { key: "low", label: "Under 2 kg left", tone: "warn", count: customers.filter((c) => TESTS.low(subByCustomer[c.id])).length },
+            { key: "ended", label: "Expired / used up", count: customers.filter((c) => TESTS.ended(subByCustomer[c.id])).length },
+            { key: "all", label: "All customers" },
+          ]} />
+          {matching.length > LIMIT && <span style={{ fontSize: 12, color: C.textFaint }}>Showing {LIMIT} of {matching.length} — search to narrow</span>}
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
@@ -228,7 +276,7 @@ export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customer
             {loading ? (
               <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: C.textFaint }}>Loading…</td></tr>
             ) : visibleCustomers.length === 0 ? (
-              <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: C.textFaint, fontSize: 13 }}>No customers found.</td></tr>
+              <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: C.textFaint, fontSize: 13 }}>{show === "plans" && !term ? "No customers have a plan yet — switch to All customers or search to sell one." : "No customers found."}</td></tr>
             ) : visibleCustomers.map((c) => {
               const s = subByCustomer[c.id];
               const status = s ? effectiveStatus(s) : null;
@@ -248,14 +296,19 @@ export default function Subscriptions({ profile, isAdmin, isSuperAdmin, customer
                       </span>
                     ) : <span style={{ color: C.textFaint }}>—</span>}
                   </td>
-                  <td style={{ ...tD, color: C.textMute }}>{s ? new Date(s.expires_at).toLocaleDateString("en-GB") : "—"}</td>
+                  <td style={{ ...tD, color: s && status === "active" && String(s.expires_at).slice(0, 10) <= in7 ? C.amber : C.textMute, fontWeight: s && String(s.expires_at).slice(0, 10) <= in7 ? 600 : 400 }}>{s ? fmtDate(s.expires_at) : "—"}</td>
                   <td style={tD}>
                     <div className="flex items-center gap-2">
                       {(!s || status !== "active") && (
                         <Btn variant="outline" small icon={Plus} onClick={() => { setErr(""); setSellFor(c); }}>Sell plan</Btn>
                       )}
+                      {s && (TESTS.expiring(s) || TESTS.low(s) || status !== "active") && waLink(c.phone) && (
+                        <a href={waLink(c.phone, renewalMessage(c, s, status))} target="_blank" rel="noreferrer" title="Send a renewal message">
+                          <Btn variant="outline" small icon={MessageCircle}>Renew msg</Btn>
+                        </a>
+                      )}
                       {s && status === "active" && (
-                        <Btn variant="danger" small icon={Ban} onClick={() => cancelSub(s)}>Cancel</Btn>
+                        <Btn variant="ghost" small icon={Ban} onClick={() => cancelSub(s)}>Cancel</Btn>
                       )}
                     </div>
                   </td>

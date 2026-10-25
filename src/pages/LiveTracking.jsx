@@ -29,13 +29,29 @@ export default function LiveTracking({ toast }) {
 
   const load = useCallback(async () => {
     try {
-      const [d, t, acc, pend, out] = await Promise.all([
+      let [d, t, acc, pend, out] = await Promise.all([
         api.fetchDrivers(),
         api.fetchTasks(),
         api.fetchDriverAccounts(),
         api.fetchPendingDriverAccounts(),
         api.fetchMyOutlet(),
       ]);
+      // A task is dead once its order is finished (customer cancelled it,
+      // or it was delivered) — but nothing closes the task row, so the
+      // driver stayed "On task" forever. Close those here and free any
+      // driver left with no other open job.
+      const isOpen = (x) => x.status !== "done" && x.status !== "cancelled";
+      const stale = t.filter((x) => isOpen(x) && ["cancelled", "delivered"].includes(String(x.order?.order_status || "").toLowerCase()));
+      if (stale.length) {
+        await Promise.all(stale.map((x) => api.updateTaskStatus(x.id, x.order.order_status.toLowerCase() === "cancelled" ? "cancelled" : "done").catch(() => null)));
+        const staleIds = new Set(stale.map((x) => x.id));
+        t = t.map((x) => (staleIds.has(x.id) ? { ...x, status: x.order.order_status.toLowerCase() === "cancelled" ? "cancelled" : "done" } : x));
+        const busy = new Set(t.filter(isOpen).map((x) => x.driver_id));
+        const freed = d.filter((dr) => dr.status === "on_task" && !busy.has(dr.id));
+        await Promise.all(freed.map((dr) => api.setDriverStatus(dr.id, "free").catch(() => null)));
+        const freedIds = new Set(freed.map((dr) => dr.id));
+        d = d.map((dr) => (freedIds.has(dr.id) ? { ...dr, status: "free" } : dr));
+      }
       setDrivers(d);
       setTasks(t);
       setAccounts(acc);

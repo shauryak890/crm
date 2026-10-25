@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Truck, X, MapPin, Phone, Bell, ChevronRight, ShoppingBag } from "lucide-react";
-import { C, orderRef } from "../theme";
+import { C, orderRef, isCancelled, isDelivered } from "../theme";
 
 const isSameDay = (s) => {
   if (!s) return false;
@@ -13,18 +13,26 @@ const isSameDay = (s) => {
 export default function DeliveryAlert({ orders, onJump }) {
   const due = useMemo(
     () => orders
-      .filter((o) => isSameDay(o.due_date) && o.delivery_status !== "Delivered")
+      .filter((o) => isSameDay(o.due_date) && !isDelivered(o) && !isCancelled(o) && o.delivery_status !== "Cancelled")
       .sort((a, b) => (b.fulfilment === "delivery") - (a.fulfilment === "delivery")),
     [orders]
   );
-  const [collapsed, setCollapsed] = useState(false);
+  // Remember "minimised" for the rest of the browser session, so the
+  // panel doesn't re-cover the Dashboard on every reload / page change.
+  const [collapsed, setCollapsedState] = useState(() => {
+    try { return sessionStorage.getItem("wb-due-collapsed") === "1"; } catch { return false; }
+  });
+  const setCollapsed = (v) => {
+    setCollapsedState(v);
+    try { sessionStorage.setItem("wb-due-collapsed", v ? "1" : "0"); } catch { /* storage blocked */ }
+  };
 
   if (due.length === 0) return null;
 
   if (collapsed) {
     return (
       <button onClick={() => setCollapsed(false)}
-        className="wb-press wb-toast-in"
+        className="wb-press wb-toast-in wb-no-print"
         style={{ position: "fixed", right: 24, bottom: 24, background: C.navy, color: "#fff",
           border: "none", padding: "12px 18px", borderRadius: 99, fontSize: 13,
           fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8,
@@ -42,7 +50,7 @@ export default function DeliveryAlert({ orders, onJump }) {
   }
 
   return (
-    <div className="wb-toast-in"
+    <div className="wb-toast-in wb-no-print"
       style={{ position: "fixed", right: 24, bottom: 24, width: 360, maxWidth: "calc(100vw - 32px)",
         background: "#fff", borderRadius: 16,
         boxShadow: "0 24px 60px -18px rgba(15,42,59,.35)",

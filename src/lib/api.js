@@ -1,9 +1,25 @@
 import { supabase } from "./supabase";
-import { collected } from "../theme";
+import { collected, balanceDue } from "../theme";
 
 /* ------------------------------------------------------------------ */
 /*  Read helpers                                                       */
 /* ------------------------------------------------------------------ */
+
+// PostgREST caps every response at 1000 rows (Supabase's default
+// max-rows), silently truncating anything bigger. Page through with
+// .range() until a short page comes back. `build` must return a fresh
+// query each call, with a stable ORDER BY so pages don't overlap.
+const PAGE = 1000;
+async function fetchAll(build) {
+  const out = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await build().range(from, from + PAGE - 1);
+    if (error) throw error;
+    out.push(...data);
+    if (data.length < PAGE) return out;
+  }
+}
+
 export async function fetchProducts() {
   const { data, error } = await supabase
     .from("products")
@@ -24,39 +40,34 @@ export async function fetchAllProducts() {
 }
 
 export async function fetchCustomers() {
-  const { data, error } = await supabase
+  return fetchAll(() => supabase
     .from("customers")
     .select("*")
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data;
+    .order("created_at", { ascending: false })
+    .order("id"));
 }
 
 export async function fetchOrders() {
-  const { data, error } = await supabase
+  return fetchAll(() => supabase
     .from("orders")
     .select("*")
-    .order("order_no", { ascending: false });
-  if (error) throw error;
-  return data;
+    .order("order_no", { ascending: false }));
 }
 
 export async function fetchExpenses() {
-  const { data, error } = await supabase
+  return fetchAll(() => supabase
     .from("expenses")
     .select("*")
-    .order("spent_on", { ascending: false });
-  if (error) throw error;
-  return data;
+    .order("spent_on", { ascending: false })
+    .order("id"));
 }
 
 export async function fetchProfiles() {
-  const { data, error } = await supabase
+  return fetchAll(() => supabase
     .from("profiles")
     .select("*")
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data;
+    .order("created_at", { ascending: false })
+    .order("id"));
 }
 
 /* Customer-paid totals are derived from orders, not stored, so they
@@ -71,9 +82,13 @@ export function rollupCustomer(cust, orders) {
     (o) => o.customer_id === cust.id
       || (!o.customer_id && o.customer_name === `${cust.first_name} ${cust.last_name}`.trim())
   );
-  const total = mine.reduce((a, o) => a + Number(o.total), 0);
-  const paid = mine.reduce((a, o) => a + collected(o), 0);
-  return { total, paid, rest: total - paid };
+  // Cancelled orders are void: they add nothing to what the customer was
+  // billed, so they can't inflate the outstanding balance either.
+  const live = mine.filter((o) => String(o.order_status || "").toLowerCase() !== "cancelled");
+  const total = live.reduce((a, o) => a + Number(o.total || 0), 0);
+  const paid = live.reduce((a, o) => a + collected(o), 0);
+  const rest = live.reduce((a, o) => a + balanceDue(o), 0);
+  return { total, paid, rest, orders: mine };
 }
 
 /* ------------------------------------------------------------------ */
@@ -281,10 +296,22 @@ export async function markDelayNotified(id) {
   if (error) throw error;
 }
 
-export async function deleteOrder({ id, editor }) {
-  // Log first (the cascade delete would otherwise remove the order_edits
-  // row too), into a non-cascading note is impossible — so we just delete.
-  // order_items cascade-delete via FK.
+export async function deleteOrder({ id, editor, before }) {
+  // order_edits rows cascade-delete with the order, so the audit trail for
+  // a deletion is written to the console AND kept on a best-effort basis
+  // in order_edits with a null order_id (works once the FK allows it —
+  // see supabase/order_delete_audit.sql). order_items cascade via FK.
+  const snapshot = before ? {
+    order_ref: before.order_label || before.order_no, customer: before.customer_name,
+    total: before.total, amount_paid: before.amount_paid, outlet_id: before.outlet_id, created_at: before.created_at,
+  } : null;
+  try {
+    const { error: logErr } = await supabase.from("order_edits").insert({
+      order_id: null, edited_by: editor?.id || null, editor_name: editor?.name || null,
+      kind: "delete", changes: snapshot ? [{ field: "order", from: snapshot, to: null }] : [], note: `Deleted order ${snapshot?.order_ref ?? id}`,
+    });
+    if (logErr) console.warn("delete audit skipped:", logErr.message, snapshot);
+  } catch (e) { console.warn("delete audit skipped:", e?.message || e, snapshot); }
   const { error } = await supabase.from("orders").delete().eq("id", id);
   if (error) throw error;
 }
@@ -338,6 +365,11 @@ export async function createExpense(e) {
   return data;
 }
 
+export async function updateExpense(id, fields) {
+  const { error } = await supabase.from("expenses").update(fields).eq("id", id);
+  if (error) throw error;
+}
+
 export async function deleteExpense(id) {
   const { error } = await supabase.from("expenses").delete().eq("id", id);
   if (error) throw error;
@@ -370,21 +402,19 @@ export async function deleteProduct(id) {
 }
 
 export async function fetchOrderItems() {
-  const { data, error } = await supabase
+  return fetchAll(() => supabase
     .from("order_items")
-    .select("product_name, qty");
-  if (error) throw error;
-  return data;
+    .select("product_name, qty, unit, order_id")
+    .order("id"));
 }
 
 // HQ: every line item with its parent order_id, so we can attribute
 // services to outlets (via orders.outlet_id). Super_admin gets all rows.
 export async function fetchAllOrderItems() {
-  const { data, error } = await supabase
+  return fetchAll(() => supabase
     .from("order_items")
-    .select("order_id, product_name, service_type, qty, weight_kg, unit, line_total");
-  if (error) throw error;
-  return data;
+    .select("order_id, product_name, service_type, qty, weight_kg, unit, line_total")
+    .order("id"));
 }
 
 export async function fetchOrderItemsForOrder(orderId) {
@@ -536,6 +566,19 @@ export async function updateSupplyOrderStatus(id, status, hq_note) {
   if (error) throw error;
 }
 
+// HQ quotes an unpriced supply line, then the order total is re-summed
+// from its lines so it can't drift.
+export async function priceSupplyOrderLine(orderId, lineId, unitPrice, qty) {
+  const { error } = await supabase.from("supply_order_items")
+    .update({ unit_price: unitPrice, line_total: Math.round(unitPrice * qty * 100) / 100 })
+    .eq("id", lineId);
+  if (error) throw error;
+  const lines = await fetchSupplyOrderItems(orderId);
+  const total = lines.reduce((a, l) => a + Number(l.line_total || 0), 0);
+  const { error: e2 } = await supabase.from("supply_orders").update({ total }).eq("id", orderId);
+  if (e2) throw e2;
+}
+
 // ── Customer subscriptions ──────────────────────────────────────────
 export async function fetchSubscriptionPlans() {
   const { data, error } = await supabase
@@ -571,12 +614,11 @@ export async function updateSubscriptionPlan(id, patch) {
 // Fetch every customer subscription. RLS scopes: outlet sees its own,
 // super_admin sees all.
 export async function fetchCustomerSubscriptions() {
-  const { data, error } = await supabase
+  return fetchAll(() => supabase
     .from("customer_subscriptions")
     .select("*")
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data;
+    .order("created_at", { ascending: false })
+    .order("id"));
 }
 
 // Sell a plan to a customer. `outletId` is only needed for a super_admin
@@ -604,13 +646,26 @@ export async function createCustomerSubscription({ customerId, plan, outletId })
 }
 
 // Deduct kg used against an active subscription (POS billing hook).
-// Caller passes the new running total (existing weight_used_kg + this order's kg).
-export async function useSubscriptionWeight(id, newUsedTotal) {
-  const { error } = await supabase
-    .from("customer_subscriptions")
-    .update({ weight_used_kg: newUsedTotal })
-    .eq("id", id);
-  if (error) throw error;
+// Read-modify-write with a compare-and-swap on the old value, so two
+// counters billing the same plan at once can't overwrite each other's
+// deduction. Returns the new running total.
+export async function useSubscriptionWeight(id, kgUsed) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { data: cur, error: readErr } = await supabase
+      .from("customer_subscriptions").select("weight_used_kg").eq("id", id).single();
+    if (readErr) throw readErr;
+    const before = Number(cur.weight_used_kg) || 0;
+    const next = Math.round((before + Number(kgUsed)) * 100) / 100;
+    const { data, error } = await supabase
+      .from("customer_subscriptions")
+      .update({ weight_used_kg: next })
+      .eq("id", id)
+      .eq("weight_used_kg", cur.weight_used_kg)
+      .select("id");
+    if (error) throw error;
+    if (data?.length) return next;          // swap won
+  }
+  throw new Error("Subscription balance changed elsewhere — please refresh and retry.");
 }
 
 export async function cancelCustomerSubscription(id) {
@@ -650,15 +705,18 @@ export async function fetchAppOrders() {
 // the caller can unsubscribe on unmount. `onChange` fires on any insert/
 // update/delete to an `orders` row — the caller re-fetches to stay simple
 // (RLS guarantees we only ever receive our own outlet's rows).
-export function subscribeAppOrders(onChange) {
+// `onStatus` receives the channel state ("SUBSCRIBED", "CHANNEL_ERROR",
+// "TIMED_OUT", "CLOSED"). Each caller needs its own channel `name` —
+// two subscriptions sharing one name would tear each other down.
+export function subscribeAppOrders(onChange, onStatus, name = "app-orders") {
   const channel = supabase
-    .channel("app-orders")
+    .channel(name)
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "orders" },
       (payload) => onChange(payload)
     )
-    .subscribe();
+    .subscribe((status) => onStatus && onStatus(status));
   return channel;
 }
 
@@ -796,6 +854,11 @@ export async function assignDriver({ order_id, driver_id, type = "pickup" }) {
   }
   if (driver_id) await supabase.from("drivers").update({ status: "on_task" }).eq("id", driver_id);
   return task;
+}
+
+export async function setDriverStatus(id, status) {
+  const { error } = await supabase.from("drivers").update({ status }).eq("id", id);
+  if (error) throw error;
 }
 
 export async function updateTaskStatus(id, status) {

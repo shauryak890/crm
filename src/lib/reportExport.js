@@ -1,4 +1,4 @@
-import { STORE, collected, inr, orderRef } from "../theme";
+import { STORE, collected, inr, orderRef, revenueDate } from "../theme";
 
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
@@ -16,14 +16,22 @@ function inRange(iso, from, to) {
 // rows, grand totals, and (for HQ) a per-outlet breakdown. Both the PDF
 // and Excel exporters consume this same shape so the two outputs never
 // drift apart.
-export function buildReportData({ orders, expenses, outlets = [], from, to, isSuperAdmin }) {
+export function buildReportData({ orders, expenses, outlets = [], from, to, isSuperAdmin,
+  subscriptions = [], supplyOrders = [], customers = [] }) {
   const outletName = (id) => outlets.find((o) => o.id === id)?.name || "—";
+  const customerName = (id) => {
+    const c = customers.find((x) => x.id === id);
+    return c ? `${c.first_name} ${c.last_name || ""}`.trim() : "—";
+  };
 
-  const salesRows = orders
-    .filter((o) => inRange(o.created_at, from, to))
-    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+  // Orders land on the day their money came in (revenueDate: the day a
+  // fully paid order was paid, else the day it was billed) — the same
+  // rule the Dashboard uses, so the two always agree.
+  const orderRows = orders
+    .filter((o) => inRange(revenueDate(o), from, to))
     .map((o) => ({
-      date: fmtDateTime(o.created_at),
+      sortKey: new Date(revenueDate(o)).getTime(),
+      date: fmtDateTime(revenueDate(o)),
       order_no: orderRef(o),
       outlet: isSuperAdmin ? outletName(o.outlet_id) : undefined,
       customer: o.customer_name || "—",
@@ -34,18 +42,56 @@ export function buildReportData({ orders, expenses, outlets = [], from, to, isSu
       collected: collected(o),
       paid_at: fmtWhen(o.paid_at),
       delivered_at: fmtWhen(o.delivered_at),
+      isOrder: true,
     }));
 
-  const expenseRows = expenses
-    .filter((e) => inRange(e.spent_on, from, to))
-    .sort((a, b) => new Date(a.spent_on) - new Date(b.spent_on))
-    .map((e) => ({
-      date: fmtDate(e.spent_on),
-      title: e.title,
-      outlet: isSuperAdmin ? outletName(e.outlet_id) : undefined,
-      category: e.category,
-      amount: Number(e.amount) || 0,
-    }));
+  // Subscription plan sales are income too.
+  const planRows = subscriptions
+    .filter((s) => s.status !== "cancelled" && Number(s.price_paid) > 0 && inRange(s.purchased_at || s.created_at, from, to))
+    .map((s) => {
+      const when = s.purchased_at || s.created_at;
+      return {
+        sortKey: new Date(when).getTime(),
+        date: fmtDateTime(when),
+        order_no: `PLAN ${s.plan_name || ""}`.trim(),
+        outlet: isSuperAdmin ? outletName(s.outlet_id) : undefined,
+        customer: customerName(s.customer_id),
+        items: `${s.weight_limit_kg} kg plan`,
+        payment_status: "Paid",
+        payment_method: "Plan sale",
+        total: Number(s.price_paid) || 0,
+        collected: Number(s.price_paid) || 0,
+        paid_at: fmtWhen(when),
+        delivered_at: "—",
+        isOrder: false,
+      };
+    });
+
+  const salesRows = [...orderRows, ...planRows].sort((a, b) => a.sortKey - b.sortKey);
+
+  // Running costs + supply orders HQ has delivered.
+  const expenseRows = [
+    ...expenses
+      .filter((e) => inRange(e.spent_on, from, to))
+      .map((e) => ({
+        sortKey: new Date(e.spent_on).getTime(),
+        date: fmtDate(e.spent_on),
+        title: e.title,
+        outlet: isSuperAdmin ? outletName(e.outlet_id) : undefined,
+        category: e.category,
+        amount: Number(e.amount) || 0,
+      })),
+    ...supplyOrders
+      .filter((s) => s.status === "received" && inRange(s.updated_at || s.created_at, from, to))
+      .map((s) => ({
+        sortKey: new Date(s.updated_at || s.created_at).getTime(),
+        date: fmtDate(s.updated_at || s.created_at),
+        title: `Supply order #${s.order_no}`,
+        outlet: isSuperAdmin ? outletName(s.outlet_id) : undefined,
+        category: "Supplies",
+        amount: Number(s.total) || 0,
+      })),
+  ].sort((a, b) => a.sortKey - b.sortKey);
 
   const totalSales = salesRows.reduce((a, r) => a + r.collected, 0);
   const totalExpenses = expenseRows.reduce((a, r) => a + r.amount, 0);
@@ -56,7 +102,7 @@ export function buildReportData({ orders, expenses, outlets = [], from, to, isSu
     for (const r of salesRows) {
       m[r.outlet] = m[r.outlet] || { outlet: r.outlet, sales: 0, expenses: 0, orders: 0 };
       m[r.outlet].sales += r.collected;
-      m[r.outlet].orders += 1;
+      if (r.isOrder) m[r.outlet].orders += 1;
     }
     for (const r of expenseRows) {
       m[r.outlet] = m[r.outlet] || { outlet: r.outlet, sales: 0, expenses: 0, orders: 0 };
@@ -71,7 +117,7 @@ export function buildReportData({ orders, expenses, outlets = [], from, to, isSu
     summary: {
       totalSales, totalExpenses,
       netProfit: totalSales - totalExpenses,
-      orderCount: salesRows.length,
+      orderCount: orderRows.length,
     },
   };
 }

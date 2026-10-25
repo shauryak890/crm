@@ -81,7 +81,7 @@ export default function Login() {
       <main className="wb-login-form wb-enter"
         style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "48px 56px" }}>
         <div style={{ width: 400, maxWidth: "100%" }}>
-          <div className="flex items-center justify-center rounded-xl" style={{ background: C.tealSoft, width: 48, height: 48, marginBottom: 18 }}>
+          <div className="flex items-center justify-center rounded-xl" style={{ background: C.navy, width: 48, height: 48, marginBottom: 18 }}>
             <Logo size={30} />
           </div>
           <h2 style={{ fontSize: 26, fontWeight: 700, color: C.navy, letterSpacing: "-.02em", lineHeight: 1.15, marginBottom: 6 }}>

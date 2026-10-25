@@ -3,9 +3,9 @@ import {
   Search, Shirt, ShoppingCart, Trash2, Banknote, Printer, X, Plus, UserCheck, Camera, FileText, Pencil,
   Users as UsersIcon, Maximize2, Minimize2, Image as ImageIcon, BadgePercent, Store,
 } from "lucide-react";
-import { C, DISPLAY, STORE, SERVICE_TYPES, PAYMENT_METHODS, DAILY_CAPACITY, inr } from "../theme";
+import { C, DISPLAY, STORE, SERVICE_TYPES, PAYMENT_METHODS, DAILY_CAPACITY, inr, localIsoDate, normPhone, isValidPhone, isCancelled, balanceDue, orderRef, fmtDay as fmtShortDate } from "../theme";
 import * as api from "../lib/api";
-import { Card, PageHead, Btn, iconBtn, Modal, field, fieldLabel } from "../components/ui";
+import { Card, PageHead, Btn, iconBtn, Modal, field, fieldLabel, useEscape } from "../components/ui";
 import CameraCapture from "../components/CameraCapture";
 
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
@@ -46,11 +46,7 @@ const posField = { width: "100%", border: `1px solid ${C.border}`, borderRadius:
 const miniField = { width: 64, border: `1px solid ${C.border}`, borderRadius: 9, padding: "6px 9px", fontSize: 13, outline: "none" };
 const tog = (active) => ({ padding: "10px 0", borderRadius: 11, fontWeight: 700, fontSize: 13, cursor: "pointer", border: active ? "none" : `1px solid ${C.border}`, background: active ? C.teal : "#fff", color: active ? "#fff" : C.textMute });
 
-const todayPlus = (days) => {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-};
+const todayPlus = (days) => localIsoDate(days);
 const fmtDay = (iso) => {
   try {
     return new Date(iso + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short" });
@@ -63,8 +59,17 @@ const splitName = (full) => {
 
 export default function POS({ products, customers, orders = [], onPay, profile, focusMode, setFocusMode, isAdmin, onQuickAddProduct,
   isSuperAdmin, outlets = [], billingOutletId, setBillingOutletId, subscriptions = [], onUseSubscription,
-  subscriptionPlans = [], onSellSubscription }) {
+  subscriptionPlans = [], onSellSubscription, orderItems = [], intent }) {
   const [cart, setCart] = useState([]);
+  const [clearedCart, setClearedCart] = useState(null);   // last cleared cart, for Undo
+  const [repeating, setRepeating] = useState(false);
+  const clearTimer = useRef(null);
+  const clearCart = () => {
+    if (!cart.length) return;
+    setClearedCart(cart); setCart([]);
+    clearTimeout(clearTimer.current);
+    clearTimer.current = setTimeout(() => setClearedCart(null), 8000);
+  };
   const [modal, setModal] = useState(null);          // product object
   const [editingKey, setEditingKey] = useState(null); // cart key being edited (null = adding new)
   const scrollRef = useRef(null);                     // scroll container around form+cart
@@ -74,6 +79,7 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
   // Extra services ticked onto the SAME garment (e.g. Dry Clean + Starching
   // + Steam Press). Each is a catalogue product; its price adds to the line.
   const [addons, setAddons] = useState([]);          // [{ id, name, price }]
+  const [addonQ, setAddonQ] = useState("");          // filter for the add-on list
   const [qty, setQty] = useState(1);                 // piece count
   const [weight, setWeight] = useState("1");          // kg for kg-priced items
   const [method, setMethod] = useState("UPI");
@@ -87,9 +93,10 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
 
   // Inline client details (no dropdown — typing the phone matches an
   // existing customer; otherwise a new one is created on bill).
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [address, setAddress] = useState("");
+  // "New sale" from a customer's profile arrives pre-filled.
+  const [name, setName] = useState(intent?.customer?.name || "");
+  const [phone, setPhone] = useState(intent?.customer?.phone || "");
+  const [address, setAddress] = useState(intent?.customer?.address || "");
   const [fulfilment, setFulfilment] = useState("pickup");
   const [dueDate, setDueDate] = useState(() => todayPlus(2));
 
@@ -150,10 +157,6 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
 
   // Phone → existing customer. Normalise to the last 10 digits so
   // '+91 87579 38961', '08757938961' and '8757938961' all match.
-  const normPhone = (s) => {
-    const digits = String(s || "").replace(/\D/g, "");
-    return digits.length >= 10 ? digits.slice(-10) : digits;
-  };
   const matched = useMemo(() => {
     const p = normPhone(phone);
     if (p.length < 10) return null;
@@ -175,6 +178,52 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
       && Number(s.weight_used_kg) < Number(s.weight_limit_kg)
     ) || null;
   }, [matched, subscriptions]);
+  // Returning customer at a glance: what they still owe and their last
+  // order (with a one-tap "repeat" that refills the cart from it).
+  const customerInfo = useMemo(() => {
+    if (!matched) return null;
+    const theirs = orders.filter((o) => o.customer_id === matched.id && !isCancelled(o));
+    const owing = theirs.filter((o) => balanceDue(o) > 0);
+    const last = theirs.reduce((m, o) => (!m || new Date(o.created_at) > new Date(m.created_at) ? o : m), null);
+    return { due: owing.reduce((a, o) => a + balanceDue(o), 0), dueCount: owing.length, last };
+  }, [matched, orders]);
+  const repeatLast = async () => {
+    if (!customerInfo?.last || repeating) return;
+    setRepeating(true);
+    try {
+      const rows = await api.fetchOrderItemsForOrder(customerInfo.last.id);
+      const byName = new Map(outletProducts.map((p) => [p.name, p]));
+      const lines = rows.map((r, i) => {
+        // Re-price from today's catalogue where the item still exists.
+        const p = byName.get(r.product_name);
+        const unit = r.unit === "kg" ? "kg" : "piece";
+        const unit_price = p ? Number(p.price) : Number(r.unit_price) || 0;
+        return repriceLine({
+          key: Date.now() + i, product_name: r.product_name, service_type: r.service_type || "Laundry", addons: [],
+          express: !!r.express, qty: Number(r.qty) || 1, weight_kg: unit === "kg" ? Number(r.weight_kg) || 1 : null, unit, unit_price, line_total: 0,
+        });
+      });
+      setCart((c) => [...c, ...lines]);
+      setErr(lines.length ? "" : "That order had no items to repeat.");
+    } catch (e) { setErr("Could not load the last order: " + e.message); }
+    setRepeating(false);
+  };
+
+  // Keyboard: "/" finds a product, Enter adds from the service picker,
+  // F2 = Pay & Bill, F4 = Save unpaid.
+  const payRef = useRef(null);
+  useEffect(() => {
+    const onKey = (e) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+      if (e.key === "/" && !typing) { e.preventDefault(); searchRef.current?.focus(); return; }
+      if (e.key === "F2") { e.preventDefault(); const r = payRef.current; r.pay(r.amountReceived === "" ? r.total : Number(r.amountReceived)); return; }
+      if (e.key === "F4") { e.preventDefault(); payRef.current.pay(0); return; }
+      if (e.key === "Enter" && payRef.current.modal && e.target.tagName !== "TEXTAREA" && e.target.tagName !== "BUTTON") { e.preventDefault(); payRef.current.add(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const subRemainingKg = activeSubscription
     ? Math.max(0, Number(activeSubscription.weight_limit_kg) - Number(activeSubscription.weight_used_kg))
     : 0;
@@ -231,7 +280,14 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
   // "touched" flag whenever we lock onto an existing customer.
   const discTouched = useRef(false);
   useEffect(() => {
-    if (matched) { discTouched.current = false; return; }
+    if (matched) {
+      // Locked onto a returning customer (e.g. name typed first, phone
+      // completed after): withdraw the auto-applied inaugural offer. A
+      // discount the cashier typed by hand is left alone.
+      if (!discTouched.current) setDisc(0);
+      discTouched.current = false;
+      return;
+    }
     if (isNewCustomer && !discTouched.current) {
       setDisc((d) => (d === NEW_CUST_MAX_DISC ? d : NEW_CUST_MAX_DISC));
     }
@@ -263,6 +319,22 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
     return ["All", ...Array.from(set).sort()];
   }, [outletProducts]);
 
+  // Names that appear more than once (e.g. "Shirt" under Dry Clean and
+  // Steam Press) get their category printed on the tile.
+  const dupNames = useMemo(() => {
+    const seen = new Map();
+    outletProducts.forEach((p) => { const k = p.name.trim().toLowerCase(); seen.set(k, (seen.get(k) || 0) + 1); });
+    return new Set([...seen].filter(([, n]) => n > 1).map(([k]) => k));
+  }, [outletProducts]);
+  // The 8 most-billed items at this outlet, for one-tap access.
+  const frequent = useMemo(() => {
+    const counts = new Map();
+    orderItems.forEach((i) => counts.set(i.product_name, (counts.get(i.product_name) || 0) + 1));
+    const byName = new Map(outletProducts.map((p) => [p.name, p]));
+    return [...counts].sort((a, b) => b[1] - a[1]).map(([n]) => byName.get(n)).filter(Boolean).slice(0, 8);
+  }, [orderItems, outletProducts]);
+  const searchRef = useRef(null);
+
   const visible = outletProducts.filter((p) => {
     const matchesQuery = p.name.toLowerCase().includes(search.toLowerCase());
     const matchesCat = category === "All" || (p.category || "General") === category;
@@ -271,8 +343,10 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
 
   const closeModal = () => {
     setModal(null); setEditingKey(null);
-    setQty(1); setWeight("1"); setExpress(false); setSvc("Laundry"); setAddons([]); setErr("");
+    setQty(1); setWeight("1"); setExpress(false); setSvc("Laundry"); setAddons([]); setAddonQ(""); setErr("");
   };
+  useEscape(closeModal, !!modal);
+  useEscape(() => setPickerOpen(false), pickerOpen);
 
   const toggleAddon = (p) => setAddons((cur) =>
     cur.some((a) => a.id === p.id)
@@ -291,6 +365,36 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
     setQty(item.qty || 1);
     setWeight(item.weight_kg != null ? String(item.weight_kg) : "1");
     setAddons(Array.isArray(item.addons) ? item.addons : []);
+  };
+
+  // Re-price a cart line after its quantity changes (the +/− buttons).
+  // Mirrors add(): express ×1.6 on the whole line; add-ons per piece.
+  const repriceLine = (e) => {
+    const m = e.express ? 1.6 : 1;
+    const addonSum = (e.addons || []).reduce((a, x) => a + Number(x.price || 0), 0);
+    const line_total = e.unit === "kg"
+      ? Math.round(Number(e.unit_price) * Number(e.weight_kg) * m) + Math.round(addonSum * Math.max(1, e.qty) * m)
+      : Math.round(Number(e.unit_price) * e.qty * m);
+    return { ...e, line_total };
+  };
+  const bumpQty = (key, d) => setCart((c) => c.map((x) => (x.key === key ? repriceLine({ ...x, qty: Math.max(1, (Number(x.qty) || 1) + d) }) : x)));
+
+  // Open the service picker for a product, pre-selecting the service type
+  // and Normal/Express last used for it at this counter.
+  const openProduct = (p) => {
+    let mem = {};
+    try { mem = JSON.parse(localStorage.getItem("wb:pos:svc") || "{}")[p.name] || {}; } catch { /* storage blocked */ }
+    setModal(p); setEditingKey(null);
+    setSvc(SERVICE_TYPES.includes(mem.svc) ? mem.svc : "Laundry");
+    setExpress(!!mem.express);
+    setQty(1); setWeight("1"); setAddons([]); setErr("");
+  };
+  const rememberService = (name, s, ex) => {
+    try {
+      const all = JSON.parse(localStorage.getItem("wb:pos:svc") || "{}");
+      all[name] = { svc: s, express: ex };
+      localStorage.setItem("wb:pos:svc", JSON.stringify(all));
+    } catch { /* storage blocked */ }
   };
 
   const add = () => {
@@ -325,6 +429,7 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
       line_total: price,
     };
     const wasAdding = !editingKey;
+    rememberService(modal.name, svc, express);
     setCart((c) => editingKey
       ? c.map((x) => (x.key === editingKey ? entry : x))
       : [...c, entry]
@@ -378,7 +483,7 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
   // the picked billing outlet would show another store's load.
   const capacityOutletId = isSuperAdmin ? billingOutletId : profile?.outlet_id;
   const bookedFor = (date) => orders
-    .filter((o) => o.due_date === date && o.order_status !== "Delivered"
+    .filter((o) => o.due_date === date && o.order_status !== "Delivered" && !isCancelled(o)
       && (!capacityOutletId || o.outlet_id === capacityOutletId))
     .reduce((a, o) => a + (Number(o.pieces) || 0), 0);
   const bookedToday = useMemo(() => bookedFor(dueDate), [orders, dueDate, capacityOutletId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -404,8 +509,9 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
     // Required fields (per project decision: everything required).
     if (!name.trim())    { setErr("Customer name is required."); return; }
     if (!phone.trim())   { setErr("Phone number is required."); return; }
+    if (!isValidPhone(phone)) { setErr("Enter a valid 10-digit mobile number."); return; }
     if (!dueDate)        { setErr("Delivery date is required."); return; }
-    if (!address.trim()) { setErr("Address is required."); return; }
+    if (!address.trim() && fulfilment === "delivery") { setErr("Address is required for home delivery."); return; }
     // A super-admin has no home outlet — they must pick which store the
     // order belongs to before billing.
     if (isSuperAdmin && !billingOutletId) {
@@ -444,7 +550,7 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
         customer = await api.createCustomer({
           first_name,
           last_name,
-          phone: phone.trim(),
+          phone: normPhone(phone),
           address: address.trim(),
           ...outletStamp,
         });
@@ -460,7 +566,7 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
       const order = {
         customer_id: customer.id,
         customer_name: name.trim(),
-        phone: phone.trim(),
+        phone: normPhone(phone),
         address: address.trim(),
         fulfilment,
         due_date: dueDate,
@@ -473,6 +579,7 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
         payment_method: method,
         payment_status: status,
         amount_paid: paid,
+        paid_at: status === "Paid" ? new Date().toISOString() : null,
         delivery_status: "Pending",
         order_status: "Order Placed",
         channel: "walk-in",
@@ -501,6 +608,9 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
     setBusy(false);
   };
 
+  // Latest values for the keyboard handler (registered once, above).
+  payRef.current = { pay, total, amountReceived, add, modal };
+
   return (
     <div>
       <PageHead title="Point of Sale" sub="Walk-in counter billing">
@@ -509,14 +619,16 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
           {focusMode ? "Exit focus" : "Focus mode"}
         </Btn>
       </PageHead>
-      <div className="grid gap-4" style={{ gridTemplateColumns: "minmax(0,1.5fr) minmax(0,1fr)", height: "calc(100vh - 132px)", minHeight: 0 }}>
+      <div className="grid gap-4 wb-pos-grid" style={{ gridTemplateColumns: "minmax(0,1.5fr) minmax(0,1fr)", height: "calc(100vh - 132px)", minHeight: 0 }}>
         {/* product grid */}
         <Card pad={false} style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
           <div style={{ padding: 16, borderBottom: `1px solid ${C.borderSoft}`, display: "flex", flexDirection: "column", gap: 12 }}>
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-2 rounded-xl" style={{ border: `1px solid ${C.border}`, padding: "9px 12px", flex: 1 }}>
                 <Search size={15} color={C.textFaint} />
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find a product…" style={{ border: "none", outline: "none", fontSize: 13.5, width: "100%", background: "transparent" }} />
+                <input ref={searchRef} value={search} onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && visible[0]) { openProduct(visible[0]); } if (e.key === "Escape") setSearch(""); }}
+                  placeholder="Find a product…  ( / )" style={{ border: "none", outline: "none", fontSize: 13.5, width: "100%", background: "transparent" }} />
               </div>
               {isAdmin && (
                 <button type="button" onClick={() => setQuickAddOpen(true)} title="Add a new item to the catalogue"
@@ -526,6 +638,17 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
                 </button>
               )}
             </div>
+            {frequent.length > 0 && !search && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: C.textFaint, letterSpacing: ".08em", textTransform: "uppercase" }}>Frequent</span>
+                {frequent.map((p) => (
+                  <button key={p.id} type="button" onClick={() => openProduct(p)} className="wb-press"
+                    style={{ padding: "5px 10px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", border: `1px solid ${C.teal}55`, background: C.tealSoft, color: C.tealDark }}>
+                    {p.name} · {inr(p.price)}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex items-center gap-2 flex-wrap">
               {categories.map((cat) => {
                 const active = category === cat;
@@ -553,12 +676,15 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
               </div>
             ) : null}
             {(!isSuperAdmin || billingOutletId) && visible.map((p) => (
-              <button key={p.id} onClick={() => setModal(p)}
+              <button key={p.id} onClick={() => openProduct(p)}
                 className="flex flex-col items-center justify-center rounded-xl"
                 style={{ background: "#F7FAFB", border: `1px solid ${C.borderSoft}`, padding: "16px 8px", cursor: "pointer", borderTop: `3px solid ${C.teal}` }}>
                 <Shirt size={26} color={C.navy} />
                 <span style={{ fontSize: 11.5, fontWeight: 600, color: C.text, marginTop: 9, textAlign: "center", lineHeight: 1.25 }}>{p.name}</span>
-                <span style={{ fontSize: 11, fontWeight: 700, color: C.tealDark, marginTop: 4 }}>{inr(p.price)}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: C.tealDark, marginTop: 4 }}>{inr(p.price)}{p.unit === "kg" ? "/kg" : ""}</span>
+                {category === "All" && dupNames.has(p.name.trim().toLowerCase()) && (
+                  <span style={{ fontSize: 9.5, fontWeight: 600, color: C.textFaint, marginTop: 2 }}>{p.category || "General"}</span>
+                )}
               </button>
             ))}
           </div>
@@ -607,6 +733,24 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
                 <UsersIcon size={12} /> Pick from list
               </button>
             </div>
+            {matched && customerInfo && (customerInfo.due > 0 || customerInfo.last) && (
+              <div className="rounded-xl" style={{ background: "#fff", border: `1px solid ${customerInfo.due > 0 ? C.red + "44" : C.border}`, padding: "8px 12px", fontSize: 12 }}>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  {customerInfo.due > 0
+                    ? <span style={{ color: C.red, fontWeight: 700 }}>Owes {inr(customerInfo.due)} on {customerInfo.dueCount} earlier order{customerInfo.dueCount === 1 ? "" : "s"}</span>
+                    : <span style={{ color: C.green, fontWeight: 700 }}>No dues</span>}
+                  {customerInfo.last && (
+                    <span style={{ color: C.textMute }}>Last: #{orderRef(customerInfo.last)} · {fmtShortDate(customerInfo.last.created_at)} · {inr(customerInfo.last.total)}</span>
+                  )}
+                </div>
+                {customerInfo.last && (
+                  <button type="button" onClick={repeatLast} disabled={repeating}
+                    className="wb-press" style={{ marginTop: 6, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 10px", fontSize: 11.5, fontWeight: 700, color: C.navy, cursor: "pointer" }}>
+                    {repeating ? "Loading…" : "↻ Repeat last order"}
+                  </button>
+                )}
+              </div>
+            )}
             {matched && (
               <div className="flex items-center justify-between rounded-xl" style={{ background: C.tealLight, color: C.tealDark, padding: "8px 12px", fontSize: 12, fontWeight: 700 }}>
                 <span className="flex items-center gap-2"><UserCheck size={14} /> Existing client · {matched.code}</span>
@@ -717,7 +861,7 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
             </div>
 
             <div>
-              <label style={posLbl}>Address *</label>
+              <label style={posLbl}>Address {fulfilment === "delivery" ? "*" : <span style={{ textTransform: "none", fontWeight: 500, color: C.textFaint }}>(optional for pickup)</span>}</label>
               <textarea value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Flat / street / area / pincode" rows={2}
                 style={{ ...posField, resize: "vertical", fontFamily: "inherit" }} />
             </div>
@@ -773,7 +917,14 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span style={{ fontWeight: 800, color: C.navy }}>{inr(i.line_total)}</span>
+                  <span className="inline-flex items-center" style={{ border: `1px solid ${C.border}`, borderRadius: 9, overflow: "hidden" }}>
+                    <button type="button" onClick={() => bumpQty(i.key, -1)} disabled={Number(i.qty) <= 1} aria-label="One fewer"
+                      style={{ width: 26, height: 28, border: "none", background: "#fff", cursor: "pointer", color: C.navy, fontWeight: 700, opacity: Number(i.qty) <= 1 ? .35 : 1 }}>−</button>
+                    <span style={{ minWidth: 22, textAlign: "center", fontSize: 12.5, fontWeight: 700 }}>{i.qty}</span>
+                    <button type="button" onClick={() => bumpQty(i.key, 1)} aria-label="One more"
+                      style={{ width: 26, height: 28, border: "none", background: "#fff", cursor: "pointer", color: C.navy, fontWeight: 700 }}>+</button>
+                  </span>
+                  <span style={{ fontWeight: 800, color: C.navy, minWidth: 54, textAlign: "right" }}>{inr(i.line_total)}</span>
                   <button onClick={() => editItem(i)} title="Edit" style={iconBtn(C.tealLight, C.tealDark)}><Pencil size={14} /></button>
                   <button onClick={() => setCart((c) => c.filter((x) => x.key !== i.key))} title="Remove" style={iconBtn(C.redLt, C.red)}><Trash2 size={14} /></button>
                 </div>
@@ -849,10 +1000,19 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
             {err && (
               <div style={{ background: C.redLt, color: C.red, fontSize: 12, fontWeight: 600, padding: "7px 11px", borderRadius: 9, marginBottom: 9 }}>{err}</div>
             )}
+            {clearedCart && (
+              <div className="flex items-center justify-between" style={{ background: C.bg, fontSize: 12, fontWeight: 600, padding: "6px 11px", borderRadius: 9, marginBottom: 9, color: C.textMute }}>
+                Cart cleared ({clearedCart.length} item{clearedCart.length === 1 ? "" : "s"})
+                <button type="button" onClick={() => { setCart(clearedCart); setClearedCart(null); }} style={{ border: "none", background: "none", color: C.tealDark, fontWeight: 700, cursor: "pointer" }}>Undo</button>
+              </div>
+            )}
+            <p className="wb-hide-sm" style={{ fontSize: 10.5, color: C.textFaint, marginBottom: 6, textAlign: "center" }}>
+              <kbd className="wb-kbd">/</kbd> find product · <kbd className="wb-kbd">Enter</kbd> add · <kbd className="wb-kbd">F2</kbd> pay &amp; bill · <kbd className="wb-kbd">F4</kbd> save unpaid
+            </p>
             <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr 0.7fr" }}>
               <Btn variant="success" icon={Banknote} onClick={() => pay(amountReceived === "" ? total : Number(amountReceived))} small disabled={busy || blockBill}>Pay &amp; Bill</Btn>
               <Btn variant="navy" icon={Printer} onClick={() => pay(0)} small disabled={busy || blockBill}>Save Unpaid</Btn>
-              <Btn variant="danger" icon={X} small onClick={() => setCart([])}>Clear</Btn>
+              <Btn variant="danger" icon={X} small onClick={clearCart} disabled={!cart.length}>Clear</Btn>
             </div>
           </div>
         </Card>
@@ -1019,9 +1179,12 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
                 <p style={{ fontSize: 11, color: C.textFaint, margin: "2px 0 8px", lineHeight: 1.4 }}>
                   Tick extra services — they're added to this one item's price and printed on its single tag.
                 </p>
+                <input value={addonQ} onChange={(e) => setAddonQ(e.target.value)} placeholder="Filter add-ons…"
+                  style={{ ...posField, padding: "7px 10px", fontSize: 12.5, marginBottom: 8 }} />
                 <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr", maxHeight: 168, overflowY: "auto" }}>
                   {outletProducts
-                    .filter((p) => p.id !== modal.id && (p.unit || "piece") !== "kg")
+                    .filter((p) => p.id !== modal.id && (p.unit || "piece") !== "kg" && Number(p.price) > 0
+                      && (!addonQ.trim() || p.name.toLowerCase().includes(addonQ.trim().toLowerCase())))
                     .map((p) => {
                       const on = addons.some((a) => a.id === p.id);
                       return (
@@ -1067,7 +1230,7 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
               </div>
             </div>
             <div className="flex justify-end" style={{ padding: "0 24px 22px" }}>
-              <Btn variant="primary" icon={editingKey ? Pencil : Plus} onClick={add}>
+              <Btn variant="primary" icon={editingKey ? Pencil : Plus} onClick={add} title="Enter">
                 {editingKey ? "Save changes" : "Add to Cart"}
               </Btn>
             </div>

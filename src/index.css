@@ -61,6 +61,30 @@ input::placeholder { color: #B0BBC6; }
   50%      { opacity: .55; transform: scale(.85); }
 }
 
+@keyframes wb-drawer-in {
+  from { transform: translate3d(32px, 0, 0); opacity: .6; }
+  to   { transform: none; opacity: 1; }
+}
+@keyframes wb-shimmer {
+  from { background-position: -320px 0; }
+  to   { background-position: 320px 0; }
+}
+.wb-drawer-in { animation: wb-drawer-in .28s var(--ease) both; }
+.wb-skel {
+  border-radius: 6px;
+  background: linear-gradient(90deg, #EEF2F5 0px, #F7F9FB 80px, #EEF2F5 160px) #EEF2F5;
+  background-size: 640px 100%;
+  animation: wb-shimmer 1.3s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wb-skel, .wb-enter, .wb-drawer-in, .wb-modal-in, .wb-toast-in { animation: none !important; }
+}
+
+/* Clickable table rows (open the side drawer) */
+.wb-row { cursor: pointer; transition: background .15s var(--ease); }
+.wb-row:hover { background: #F7FAFB; }
+.wb-row:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
+
 .wb-enter    { animation: wb-fade-up .35s var(--ease) both; }
 .wb-fade-in  { animation: wb-fade    .25s var(--ease) both; }
 .wb-modal-in { animation: wb-scale-in .25s var(--ease) both; }
@@ -125,6 +149,41 @@ input::placeholder { color: #B0BBC6; }
   .wb-hide-sm { display: none !important; }
 }
 
+/* ---------- HQ panel (#hq) responsive ---------- */
+@media (max-width: 900px) {
+  .wb-hq-split { grid-template-columns: 1fr !important; }
+  .wb-hq-main { padding: 22px 18px !important; }
+}
+@media (max-width: 640px) {
+  .wb-hq-header { padding: 12px 14px !important; }
+  .wb-hq-crumb { margin-left: 0 !important; padding-left: 0 !important; border-left: none !important; width: 100%; order: 3; }
+  .wb-hq-main { padding: 16px 12px !important; }
+  .wb-hq-title { font-size: 24px !important; }
+}
+@media (max-width: 520px) {
+  .wb-form-grid { grid-template-columns: 1fr !important; }
+}
+
+/* ---------- Tablet & phone ----------
+   Counter tablets (~768–1100px): tighter page padding, the POS stacks
+   products above the cart, and touch screens get larger tap targets. */
+@media (max-width: 1100px) {
+  .wb-main { padding: 22px 20px !important; }
+}
+@media (max-width: 960px) {
+  .wb-pos-grid { grid-template-columns: 1fr !important; height: auto !important; }
+  .wb-pos-grid > * { height: auto !important; max-height: none; }
+  .wb-pos-grid > *:first-child { max-height: 62vh; }
+}
+@media (max-width: 640px) {
+  .wb-main { padding: 16px 12px !important; }
+  .wb-app-header { padding: 0 12px !important; gap: 10px !important; }
+}
+@media (pointer: coarse) {
+  .wb-nav { padding: 13px 12px; }
+  .wb-row td { padding-top: 16px !important; padding-bottom: 16px !important; }
+}
+
 /* Login responsive */
 @media (max-width: 900px) {
   .wb-login-shell { grid-template-columns: 1fr !important; }
@@ -158,6 +217,21 @@ input::placeholder { color: #B0BBC6; }
     page-break-inside: avoid !important;
     break-inside: avoid !important;
   }
+}
+
+/* ---------- Print: a whole page (Sales / Dashboard / Delivery list) ----------
+   printPage() in components/ui.jsx sets body.wb-print-page for the
+   duration of the print, which re-shows the main content and drops the
+   app chrome. Without it the invoice-only rule above prints a blank sheet. */
+@media print {
+  body.wb-print-page * { visibility: visible !important; }
+  body.wb-print-page .wb-sidebar,
+  body.wb-print-page .wb-app-header,
+  body.wb-print-page .wb-no-print { display: none !important; }
+  body.wb-print-page .wb-app-shell,
+  body.wb-print-page .wb-app-main { height: auto !important; overflow: visible !important; display: block !important; }
+  body.wb-print-page .wb-app-main main { overflow: visible !important; padding: 0 !important; }
+  body.wb-print-page .wb-print-only { display: block !important; }
 }
 
 /* Thermal sticker printing is handled by a dedicated popup window
