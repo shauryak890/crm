@@ -9,7 +9,8 @@ import { C, inr, balanceDue, orderRef, isCancelled } from "../theme";
 import { Card, Btn, Badge, IconCircle, Trend, printPage } from "../components/ui";
 import { Segmented, usePersistentState, SkeletonBlock } from "../components/kit";
 import { currentPeriod } from "../lib/period";
-import { AlertTriangle, Truck, Smartphone, PackagePlus, BadgePercent, CheckCircle2, Clock } from "lucide-react";
+import { AlertTriangle, Truck, Smartphone, PackagePlus, BadgePercent, CheckCircle2, Clock, Cake } from "lucide-react";
+import { upcomingOccasions, wishedThisYear } from "../lib/occasions";
 import { localIsoDate, isDelivered, fmtDay } from "../theme";
 import { paymentTotals, buildYearData, isToday, revenueEvents, costEvents, sumEvents } from "../lib/aggregate";
 
@@ -153,7 +154,7 @@ export default function Dashboard({ orders, expenses = [], subscriptions = [], s
         </div>
       </div>
 
-      <Attention orders={orders} subscriptions={subscriptions} supplyOrders={supplyOrders} isSuperAdmin={isSuperAdmin} go={go} loading={loading} />
+      <Attention orders={orders} customers={customers} subscriptions={subscriptions} supplyOrders={supplyOrders} isSuperAdmin={isSuperAdmin} go={go} loading={loading} />
 
       {mode === "counter" ? (
         <CounterView orders={orders} revenue={revenue} go={go} />
@@ -406,7 +407,7 @@ export default function Dashboard({ orders, expenses = [], subscriptions = [], s
 }
 
 /* ── "Needs attention" — every card opens the matching filtered list ── */
-function Attention({ orders, subscriptions, supplyOrders, isSuperAdmin, go, loading }) {
+function Attention({ orders, customers = [], subscriptions, supplyOrders, isSuperAdmin, go, loading }) {
   if (loading && !orders.length) {
     return <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", marginBottom: 18 }}>
       {[0, 1, 2, 3].map((i) => <Card key={i}><SkeletonBlock h={14} w="60%" /><SkeletonBlock h={22} w="40%" style={{ marginTop: 10 }} /></Card>)}
@@ -422,6 +423,10 @@ function Attention({ orders, subscriptions, supplyOrders, isSuperAdmin, go, load
   const in7 = localIsoDate(7);
   const expiring = subscriptions.filter((s) => s.status === "active" && String(s.expires_at).slice(0, 10) >= today && String(s.expires_at).slice(0, 10) <= in7);
   const sumDue = (l) => l.reduce((a, o) => a + balanceDue(o), 0);
+  // Birthdays / anniversaries coming up whose wish hasn't gone out yet.
+  const toWish = customers.flatMap((c) => upcomingOccasions(c).filter((o) => !wishedThisYear(c, o)));
+  const bdays = toWish.filter((o) => o.kind === "birthday").length;
+  const annivs = toWish.length - bdays;
 
   const cards = [
     dueToday.length && { icon: Truck, tone: C.teal, title: `${dueToday.length} to hand over today`, sub: `${inr(sumDue(dueToday))} to collect`, to: ["delivery", { tab: "today" }] },
@@ -429,6 +434,9 @@ function Attention({ orders, subscriptions, supplyOrders, isSuperAdmin, go, load
     unpaid.length && { icon: Clock, tone: C.amber, title: `${inr(sumDue(unpaid))} unpaid`, sub: `across ${unpaid.length} order${unpaid.length === 1 ? "" : "s"}`, to: ["sales", { chip: "unpaid", period: currentPeriod("all") }] },
     appWaiting.length && { icon: Smartphone, tone: C.red, title: `${appWaiting.length} app order${appWaiting.length === 1 ? "" : "s"} awaiting pickup`, sub: "assign a driver", to: ["apporders"] },
     supply.length && { icon: PackagePlus, tone: C.navy, title: isSuperAdmin ? `${supply.length} supply order${supply.length === 1 ? "" : "s"} to approve` : `${supply.length} supply order${supply.length === 1 ? "" : "s"} on the way`, sub: isSuperAdmin ? "open HQ (#hq) to approve" : "mark received when it arrives", to: ["supplies"] },
+    toWish.length && { icon: Cake, tone: C.amber,
+      title: [bdays && `${bdays} birthday${bdays === 1 ? "" : "s"}`, annivs && `${annivs} anniversar${annivs === 1 ? "y" : "ies"}`].filter(Boolean).join(" & ") + " coming up",
+      sub: "send wishes with an offer", to: ["customers", { chip: "occasions" }] },
     expiring.length && { icon: BadgePercent, tone: C.green, title: `${expiring.length} plan${expiring.length === 1 ? "" : "s"} expiring this week`, sub: "offer a renewal", to: ["subscriptions", { chip: "expiring" }] },
   ].filter(Boolean);
 

@@ -350,6 +350,19 @@ export async function createCustomer(c) {
   throw error;
 }
 
+export async function updateCustomer(id, fields) {
+  const { data, error } = await supabase.from("customers").update(fields).eq("id", id).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// Record that this year's birthday/anniversary wish went out, so other
+// counters don't send a second one.
+export async function markOccasionWished(customerId, kind, year) {
+  const { error } = await supabase.from("customers").update({ [`${kind}_wished_year`]: year }).eq("id", customerId);
+  if (error) throw error;
+}
+
 export async function deleteCustomer(id) {
   const { error } = await supabase.from("customers").delete().eq("id", id);
   if (error) throw error;

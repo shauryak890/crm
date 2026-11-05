@@ -219,3 +219,41 @@ export function SkeletonRows({ rows = 5, cols = 5 }) {
   ));
 }
 export const SkeletonBlock = ({ h = 14, w = "100%", style }) => <div className="wb-skel" style={{ height: h, width: w, ...style }} />;
+
+/* ── Birthday / anniversary picker: day + month, year optional ─────── */
+// value is "YYYY-MM-DD" (year 2000 = year not known) or "" / null.
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+export function DayMonthInput({ value, onChange, style }) {
+  const m = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const [y, mo, d] = m ? [m[1] === "2000" ? "" : m[1], String(+m[2]), String(+m[3])] : ["", "", ""];
+  const emit = (dd, mm, yy) => {
+    if (!dd || !mm) { onChange(dd || mm ? `pending:${dd}:${mm}:${yy}` : ""); return; }
+    const year = yy && /^\d{4}$/.test(yy) ? yy : "2000";
+    const last = new Date(+year, +mm, 0).getDate();
+    onChange(`${year}-${String(mm).padStart(2, "0")}-${String(Math.min(+dd, last)).padStart(2, "0")}`);
+  };
+  // Half-filled (day picked, month not yet) is kept as a "pending:" value
+  // so the selects don't reset while the user is still choosing.
+  const p = String(value || "").startsWith("pending:") ? String(value).split(":") : null;
+  const dv = p ? p[1] : d, mv = p ? p[2] : mo, yv = p ? p[3] : y;
+  const sel = { border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 8px", fontSize: 13.5, background: "#fff", color: C.text, outline: "none" };
+  return (
+    <div className="flex items-center gap-2" style={style}>
+      <select value={dv} onChange={(e) => emit(e.target.value, mv, yv)} style={{ ...sel, width: 70 }} aria-label="Day">
+        <option value="">Day</option>
+        {Array.from({ length: 31 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
+      </select>
+      <select value={mv} onChange={(e) => emit(dv, e.target.value, yv)} style={{ ...sel, flex: 1, minWidth: 80 }} aria-label="Month">
+        <option value="">Month</option>
+        {MONTH_NAMES.map((n, i) => <option key={n} value={i + 1}>{n}</option>)}
+      </select>
+      <input value={yv} onChange={(e) => emit(dv, mv, e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="Year"
+        inputMode="numeric" style={{ ...sel, width: 70 }} aria-label="Year (optional)" />
+      {(dv || mv) && <button type="button" onClick={() => onChange("")} title="Clear"
+        style={{ border: "none", background: "none", color: C.textFaint, cursor: "pointer", fontSize: 16, padding: "0 2px" }}>×</button>}
+    </div>
+  );
+}
+// A DayMonthInput value ready to save: a full date, or null when blank /
+// half-filled.
+export const occasionValue = (v) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);

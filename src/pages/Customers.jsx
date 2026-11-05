@@ -1,12 +1,14 @@
 import React, { useMemo, useState } from "react";
-import { Plus, MessageCircle, ShoppingCart, Phone, Wallet } from "lucide-react";
+import { Plus, MessageCircle, ShoppingCart, Phone, Wallet, Cake, Pencil, Send } from "lucide-react";
 import { C, STORE, inr, orderRef, balanceDue, collected, normPhone, isValidPhone, isCancelled, fmtDate, fmtDay, localIsoDate, waLink } from "../theme";
 import { PageHead, Btn, Badge, DataTable, Modal, td, field, fieldLabel } from "../components/ui";
-import { FilterChips, Drawer, KV, SectionTitle, usePersistentState } from "../components/kit";
+import { FilterChips, Drawer, KV, SectionTitle, usePersistentState, DayMonthInput, occasionValue } from "../components/kit";
+import { OCCASIONS, upcomingOccasions, occasionInfo, wishMessage, wishedThisYear, fmtOccasion } from "../lib/occasions";
+import WhatsAppQueue from "../components/WhatsAppQueue";
 import { rollupCustomer } from "../lib/api";
 import { CollectPaymentModal } from "./Sales";
 
-const blank = () => ({ first_name: "", last_name: "", phone: "", address: "", outlet_id: "" });
+const blank = () => ({ first_name: "", last_name: "", phone: "", address: "", outlet_id: "", birthday: "", anniversary: "" });
 
 // A customer's current plan: the newest subscription that is still usable
 // (active, unexpired, kg left).
@@ -23,12 +25,16 @@ const CHIPS = [
   { key: "plan", label: "Has plan", test: (c) => !!c.plan },
   { key: "inactive", label: `Inactive ${INACTIVE_DAYS}+ days`, tone: "warn", test: (c) => c.lastAt && c.lastAt < localIsoDate(-INACTIVE_DAYS) },
   { key: "new", label: "New this month", test: (c) => String(c.created_at || "").slice(0, 7) === localIsoDate().slice(0, 7) },
+  // Birthday / anniversary in the next 7 days, or still inside its offer window.
+  { key: "occasions", label: "🎂 Birthdays & anniversaries", tone: "warn", test: (c) => c.occasions.length > 0 },
+  { key: "nodates", label: "No birthday saved", test: (c) => !c.birthday },
 ];
 const SORTS = [["recent", "Newest"], ["owed", "Most owed"], ["spent", "Top spenders"], ["last", "Last visit"]];
 
 export default function Customers({ customers, orders, subscriptions = [], loading, onAdd,
   isSuperAdmin = false, outlets = [], onOpenInvoice, initialQuery = "", intent,
-  onCollectPayment, onResetPayment, isAdmin, go }) {
+  onCollectPayment, onResetPayment, isAdmin, go, onUpdateCustomer, onMarkWished }) {
+  const [wishing, setWishing] = useState(false);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(blank);
   const [busy, setBusy] = useState(false);
@@ -51,6 +57,10 @@ export default function Customers({ customers, orders, subscriptions = [], loadi
     setBusy(true);
     const payload = { first_name: form.first_name.trim(), last_name: form.last_name.trim(), phone: p, address: form.address.trim() };
     if (isSuperAdmin) payload.outlet_id = form.outlet_id;
+    // Only send the occasion fields when filled, so adding a customer keeps
+    // working even before supabase/occasions.sql has been run.
+    if (occasionValue(form.birthday)) payload.birthday = occasionValue(form.birthday);
+    if (occasionValue(form.anniversary)) payload.anniversary = occasionValue(form.anniversary);
     const ok = await onAdd(payload);
     setBusy(false);
     if (ok) { setOpen(false); setForm(blank()); }
@@ -66,19 +76,30 @@ export default function Customers({ customers, orders, subscriptions = [], loadi
     const r = rollupCustomer(c, orders);
     const live = r.orders.filter((o) => !isCancelled(o));
     const lastAt = live.reduce((m, o) => (!m || o.created_at > m ? o.created_at : m), null);
-    return { ...c, ...r, plan: activePlan(subsByCustomer[c.id] || []), lastAt: lastAt ? String(lastAt).slice(0, 10) : null, visits: live.length };
+    return { ...c, ...r, plan: activePlan(subsByCustomer[c.id] || []), lastAt: lastAt ? String(lastAt).slice(0, 10) : null, visits: live.length,
+      occasions: upcomingOccasions(c) };
   }), [customers, orders, subsByCustomer]);
 
   const chips = CHIPS.map((c) => ({ ...c, count: all.filter(c.test).length }));
   const active = CHIPS.find((c) => c.key === chip) || CHIPS[0];
   const rows = useMemo(() => {
     const r = all.filter(active.test);
+    if (chip === "occasions") return r.sort((a, b) => Math.min(...a.occasions.map((o) => Math.abs(o.days))) - Math.min(...b.occasions.map((o) => Math.abs(o.days))));
     if (sort === "owed") return r.sort((a, b) => b.rest - a.rest);
     if (sort === "spent") return r.sort((a, b) => b.total - a.total);
     if (sort === "last") return r.sort((a, b) => String(b.lastAt || "").localeCompare(String(a.lastAt || "")));
     return r;
   }, [all, active, sort]);
   const profile = profileId ? all.find((c) => c.id === profileId) : null;
+  // Wishes not sent yet this year, soonest first — for "Send wishes".
+  const wishQueue = useMemo(() => all
+    .flatMap((c) => c.occasions.filter((o) => !wishedThisYear(c, o)).map((o) => ({
+      key: c.id + o.kind,
+      title: `${OCCASIONS[o.kind].emoji} ${c.first_name} ${c.last_name || ""}`.trim(),
+      sub: `${OCCASIONS[o.kind].label} ${o.days === 0 ? "today" : o.days > 0 ? `in ${o.days} day${o.days === 1 ? "" : "s"}` : `was ${-o.days} day${o.days === -1 ? "" : "s"} ago`} · ${c.phone || "no phone"}`,
+      phone: c.phone, text: wishMessage(c, o), customer: c, occ: o, days: o.days,
+    })))
+    .sort((a, b) => Math.abs(a.days) - Math.abs(b.days)), [all]);
 
   const columns = ["Customer", "Phone", ...(isSuperAdmin ? ["Outlet"] : []), "Visits", "Last visit", "Billed", "Due", "Plan"];
 
@@ -102,7 +123,14 @@ export default function Customers({ customers, orders, subscriptions = [], loadi
         searchKeys={["first_name", "last_name", "phone", "code", "address"]}
         placeholder="Search : code, name, phone…"
         emptyText="No customers match this filter."
-        toolbar={<FilterChips chips={chips} value={chip} onChange={setChip} />}
+        toolbar={
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <FilterChips chips={chips} value={chip} onChange={setChip} />
+            {chip === "occasions" && wishQueue.length > 0 && (
+              <Btn variant="success" small icon={Send} onClick={() => setWishing(true)}>Send wishes ({wishQueue.length})</Btn>
+            )}
+          </div>
+        }
         footer={chip === "owing" ? (list) => (
           <div className="flex justify-between" style={{ fontSize: 13 }}>
             <span style={{ color: C.textMute }}>{list.length} customers owe money</span>
@@ -112,7 +140,15 @@ export default function Customers({ customers, orders, subscriptions = [], loadi
         renderRow={(c) => (
           <tr key={c.id} className="wb-row" tabIndex={0} onClick={() => setProfileId(c.id)} onKeyDown={(e) => e.key === "Enter" && setProfileId(c.id)}>
             <td style={td}>
-              <div style={{ fontWeight: 600 }}>{c.first_name} {c.last_name}</div>
+              <div style={{ fontWeight: 600 }}>
+                {c.first_name} {c.last_name}
+                {c.occasions.map((o) => (
+                  <span key={o.kind} title={`${OCCASIONS[o.kind].label} ${o.days === 0 ? "today" : o.days > 0 ? `in ${o.days} day${o.days === 1 ? "" : "s"}` : `${-o.days} day${o.days === -1 ? "" : "s"} ago`}${wishedThisYear(c, o) ? " · wished" : ""}`}
+                    style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: C.amber, background: C.amberLt, padding: "1px 7px", borderRadius: 99 }}>
+                    {OCCASIONS[o.kind].emoji} {o.days === 0 ? "today" : o.days > 0 ? `in ${o.days}d` : `${-o.days}d ago`}{wishedThisYear(c, o) ? " ✓" : ""}
+                  </span>
+                ))}
+              </div>
               <div style={{ fontSize: 11.5, color: C.tealDark, fontWeight: 700 }}>{c.code}</div>
             </td>
             <td style={{ ...td, color: isValidPhone(c.phone) ? C.textMute : C.red }} title={isValidPhone(c.phone) ? undefined : "Not a valid 10-digit number"}>{c.phone || "—"}</td>
@@ -129,11 +165,18 @@ export default function Customers({ customers, orders, subscriptions = [], loadi
       />
 
       {profile && (
-        <CustomerDrawer c={profile} outletName={isSuperAdmin ? outletName : null}
+        <CustomerDrawer key={profile.id} c={profile} outletName={isSuperAdmin ? outletName : null}
           onClose={() => setProfileId(null)}
           onOpenInvoice={onOpenInvoice}
           onCollect={setPayOrder}
-          onNewSale={go ? () => go("pos", { customer: { name: `${profile.first_name} ${profile.last_name || ""}`.trim(), phone: profile.phone, address: profile.address } }) : null} />
+          onNewSale={go ? () => go("pos", { customer: { name: `${profile.first_name} ${profile.last_name || ""}`.trim(), phone: profile.phone, address: profile.address } }) : null}
+          onUpdate={onUpdateCustomer} onMarkWished={onMarkWished} />
+      )}
+
+      {wishing && (
+        <WhatsAppQueue title="Birthday & anniversary wishes" onClose={() => setWishing(false)}
+          items={wishQueue}
+          onSent={(it) => onMarkWished && onMarkWished(it.customer, it.occ.kind, it.occ.year)} />
       )}
 
       {payOrder && (
@@ -158,7 +201,13 @@ export default function Customers({ customers, orders, subscriptions = [], loadi
             <div><label style={fieldLabel}>Last name</label><input style={field} value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} /></div>
           </div>
           <div style={{ marginTop: 14 }}><label style={fieldLabel}>Phone *</label><input style={field} inputMode="tel" placeholder="10-digit mobile" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
-          <div style={{ marginTop: 14 }}><label style={fieldLabel}>Address</label><input style={field} value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} onKeyDown={(e) => e.key === "Enter" && save()} /></div>
+          <div style={{ marginTop: 14 }}><label style={fieldLabel}>Address</label><input style={field} value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></div>
+          <div className="grid gap-3 wb-form-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 14 }}>
+            <div><label style={fieldLabel}>Birthday <span style={{ color: C.textFaint, fontWeight: 500 }}>(for offers)</span></label>
+              <DayMonthInput value={form.birthday} onChange={(v) => setForm({ ...form, birthday: v })} /></div>
+            <div><label style={fieldLabel}>Anniversary</label>
+              <DayMonthInput value={form.anniversary} onChange={(v) => setForm({ ...form, anniversary: v })} /></div>
+          </div>
           {err && <div style={{ background: C.redLt, color: C.red, fontSize: 12.5, fontWeight: 600, padding: "9px 12px", borderRadius: 9, marginTop: 14 }}>{err}</div>}
           <div className="flex justify-end gap-2" style={{ marginTop: 22 }}>
             <Btn variant="outline" small onClick={() => setOpen(false)}>Cancel</Btn>
@@ -171,7 +220,18 @@ export default function Customers({ customers, orders, subscriptions = [], loadi
 }
 
 /* ─────────────── Customer profile drawer ─────────────── */
-function CustomerDrawer({ c, outletName, onClose, onOpenInvoice, onCollect, onNewSale }) {
+function CustomerDrawer({ c, outletName, onClose, onOpenInvoice, onCollect, onNewSale, onUpdate, onMarkWished }) {
+  const [editDates, setEditDates] = useState(false);
+  const [bday, setBday] = useState(c.birthday || "");
+  const [anniv, setAnniv] = useState(c.anniversary || "");
+  const [savingDates, setSavingDates] = useState(false);
+  const saveDates = async () => {
+    setSavingDates(true);
+    const ok = await onUpdate(c.id, { birthday: occasionValue(bday), anniversary: occasionValue(anniv) }, "Dates saved");
+    setSavingDates(false);
+    if (ok) setEditDates(false);
+  };
+  const occs = ["birthday", "anniversary"].map((k) => occasionInfo(k, c[k])).filter(Boolean);
   const owing = c.orders.filter((o) => balanceDue(o) > 0);
   const inactive = c.lastAt && c.lastAt < localIsoDate(-INACTIVE_DAYS);
   const reminder = c.rest > 0 ? waLink(c.phone, [
@@ -211,6 +271,45 @@ function CustomerDrawer({ c, outletName, onClose, onOpenInvoice, onCollect, onNe
       <KV k="Customer since" v={fmtDate(c.created_at)} />
       <KV k="Visits" v={`${c.visits}${c.lastAt ? ` · last ${fmtDay(c.lastAt)}` : ""}`} />
       {c.plan && <KV k="Plan balance" v={`${(Number(c.plan.weight_limit_kg) - Number(c.plan.weight_used_kg)).toFixed(1)} kg · until ${fmtDay(c.plan.expires_at)}`} color={C.green} />}
+
+      <SectionTitle right={onUpdate && !editDates && (
+        <button onClick={() => setEditDates(true)} style={{ border: "none", background: "none", color: C.tealDark, fontSize: 12, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <Pencil size={12} /> {occs.length ? "Edit" : "Add"}
+        </button>
+      )}>Birthday & anniversary</SectionTitle>
+      {editDates ? (
+        <div style={{ background: C.bg, borderRadius: 12, padding: 12 }}>
+          <label style={{ ...fieldLabel, marginBottom: 4 }}>Birthday</label>
+          <DayMonthInput value={bday} onChange={setBday} />
+          <label style={{ ...fieldLabel, marginBottom: 4, marginTop: 10 }}>Anniversary</label>
+          <DayMonthInput value={anniv} onChange={setAnniv} />
+          <div className="flex justify-end gap-2" style={{ marginTop: 12 }}>
+            <Btn variant="outline" small onClick={() => { setEditDates(false); setBday(c.birthday || ""); setAnniv(c.anniversary || ""); }}>Cancel</Btn>
+            <Btn variant="primary" small onClick={saveDates} disabled={savingDates}>Save</Btn>
+          </div>
+        </div>
+      ) : occs.length === 0 ? (
+        <p style={{ fontSize: 12.5, color: C.textFaint }}>Not saved yet — add them to send wishes and offers.</p>
+      ) : occs.map((o) => {
+        const cfg = OCCASIONS[o.kind];
+        const soon = (o.days >= 0 && o.days <= 7) || o.inOffer;
+        const wa = waLink(c.phone, wishMessage(c, o));
+        return (
+          <div key={o.kind} className="flex items-center justify-between gap-2 flex-wrap" style={{ padding: "6px 0", fontSize: 13 }}>
+            <span>
+              <span style={{ color: C.textMute }}>{cfg.emoji} {cfg.label}: </span>
+              <b style={{ color: C.navy }}>{fmtOccasion(c[o.kind])}</b>
+              {soon && <span style={{ color: C.amber, fontWeight: 600 }}> · {o.days === 0 ? "today!" : o.days > 0 ? `in ${o.days} day${o.days === 1 ? "" : "s"}` : `${-o.days} day${o.days === -1 ? "" : "s"} ago`}</span>}
+              {o.inOffer && <span style={{ color: C.green, fontWeight: 600 }}> · {cfg.pct}% offer active</span>}
+            </span>
+            {soon && wa && (
+              <a href={wa} target="_blank" rel="noreferrer" onClick={() => onMarkWished && onMarkWished(c, o.kind, o.year)}>
+                <Btn variant={wishedThisYear(c, o) ? "outline" : "success"} small icon={Cake}>{wishedThisYear(c, o) ? "Wished ✓ · send again" : "Send wish + offer"}</Btn>
+              </a>
+            )}
+          </div>
+        );
+      })}
 
       <SectionTitle>Orders · {c.orders.length}</SectionTitle>
       {c.orders.length === 0 ? <p style={{ color: C.textFaint, fontSize: 13 }}>No orders yet.</p> : (

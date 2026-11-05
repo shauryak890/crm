@@ -6,6 +6,8 @@ import {
 import { C, DISPLAY, STORE, SERVICE_TYPES, PAYMENT_METHODS, DAILY_CAPACITY, inr, localIsoDate, normPhone, isValidPhone, isCancelled, balanceDue, orderRef, fmtDay as fmtShortDate } from "../theme";
 import * as api from "../lib/api";
 import { Card, PageHead, Btn, iconBtn, Modal, field, fieldLabel, useEscape } from "../components/ui";
+import { DayMonthInput, occasionValue } from "../components/kit";
+import { OCCASIONS, occasionInfo } from "../lib/occasions";
 import CameraCapture from "../components/CameraCapture";
 
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
@@ -59,7 +61,14 @@ const splitName = (full) => {
 
 export default function POS({ products, customers, orders = [], onPay, profile, focusMode, setFocusMode, isAdmin, onQuickAddProduct,
   isSuperAdmin, outlets = [], billingOutletId, setBillingOutletId, subscriptions = [], onUseSubscription,
-  subscriptionPlans = [], onSellSubscription, orderItems = [], intent }) {
+  subscriptionPlans = [], onSellSubscription, orderItems = [], intent, onUpdateCustomer }) {
+  // Birthday / anniversary offer applied to this bill (an occasionInfo
+  // object), plus optional dates captured for a brand-new customer.
+  const [occasionApplied, setOccasionApplied] = useState(null);
+  const [showDates, setShowDates] = useState(false);
+  const [newBday, setNewBday] = useState("");
+  const [newAnniv, setNewAnniv] = useState("");
+  const [quickBday, setQuickBday] = useState(null); // inline "add birthday" for a regular
   const [cart, setCart] = useState([]);
   const [clearedCart, setClearedCart] = useState(null);   // last cleared cart, for Undo
   const [repeating, setRepeating] = useState(false);
@@ -185,8 +194,24 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
     const theirs = orders.filter((o) => o.customer_id === matched.id && !isCancelled(o));
     const owing = theirs.filter((o) => balanceDue(o) > 0);
     const last = theirs.reduce((m, o) => (!m || new Date(o.created_at) > new Date(m.created_at) ? o : m), null);
-    return { due: owing.reduce((a, o) => a + balanceDue(o), 0), dueCount: owing.length, last };
+    // Birthday / anniversary offers currently open for this customer, and
+    // whether this year's has already been used on another bill.
+    const offers = ["birthday", "anniversary"]
+      .map((k) => occasionInfo(k, matched[k]))
+      .filter((o) => o && o.inOffer)
+      .map((o) => ({ ...o, usedOn: theirs.find((x) => x.occasion_offer === o.key) || null }));
+    return { due: owing.reduce((a, o) => a + balanceDue(o), 0), dueCount: owing.length, last, offers };
   }, [matched, orders]);
+  // A different customer → the occasion offer applied for the previous one
+  // no longer applies.
+  useEffect(() => {
+    setOccasionApplied((prev) => {
+      if (prev) { setDisc(0); discTouched.current = false; }   // don't carry their % to the next person
+      return null;
+    });
+    setQuickBday(null);
+  }, [matched?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const repeatLast = async () => {
     if (!customerInfo?.last || repeating) return;
     setRepeating(true);
@@ -552,6 +577,8 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
           last_name,
           phone: normPhone(phone),
           address: address.trim(),
+          ...(occasionValue(newBday) ? { birthday: occasionValue(newBday) } : {}),
+          ...(occasionValue(newAnniv) ? { anniversary: occasionValue(newAnniv) } : {}),
           ...outletStamp,
         });
       }
@@ -583,6 +610,9 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
         delivery_status: "Pending",
         order_status: "Order Placed",
         channel: "walk-in",
+        // Only sent when an occasion offer was applied (keeps billing working
+        // even before supabase/occasions.sql is run).
+        ...(occasionApplied && matched && effectiveDisc > 0 ? { occasion_offer: occasionApplied.key } : {}),
         damage_note: damageNote.trim() || null,
         image_urls,
         ...outletStamp,
@@ -596,6 +626,7 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
           onUseSubscription && onUseSubscription(activeSubscription, subKgCovered);
         }
         setCart([]); setDisc(0); setTax(0); setAmountReceived("");
+        setOccasionApplied(null); setShowDates(false); setNewBday(""); setNewAnniv(""); setQuickBday(null);
         setName(""); setPhone(""); setAddress("");
         discTouched.current = false; setShowSuggest(false);
         setFulfilment("pickup"); setDueDate(todayPlus(2));
@@ -733,6 +764,63 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
                 <UsersIcon size={12} /> Pick from list
               </button>
             </div>
+            {matched && customerInfo?.offers?.map((o) => {
+              const cfg = OCCASIONS[o.kind];
+              const on = occasionApplied?.key === o.key;
+              const when = o.days === 0 ? "today" : o.days > 0 ? `in ${o.days} day${o.days === 1 ? "" : "s"}` : `${-o.days} day${o.days === -1 ? "" : "s"} ago`;
+              return (
+                <div key={o.key} className="flex items-center justify-between gap-2 flex-wrap rounded-xl"
+                  style={{ background: o.usedOn ? C.bg : C.amberLt, border: `1px solid ${o.usedOn ? C.border : C.amber + "55"}`, padding: "8px 12px", fontSize: 12 }}>
+                  <span style={{ fontWeight: 700, color: o.usedOn ? C.textMute : C.amber }}>
+                    {cfg.emoji} {cfg.label} {when}
+                    {o.usedOn ? <span style={{ fontWeight: 500 }}> · {cfg.pct}% offer already used on #{orderRef(o.usedOn)}</span>
+                      : <span style={{ fontWeight: 500 }}> · {cfg.pct}% offer till {o.validTill.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>}
+                  </span>
+                  {!o.usedOn && (on ? (
+                    <button type="button" onClick={() => { setOccasionApplied(null); setDisc(0); }}
+                      style={{ border: "none", background: C.green, color: "#fff", borderRadius: 7, padding: "4px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
+                      ✓ Applied · remove
+                    </button>
+                  ) : (
+                    <button type="button" onClick={() => { setOccasionApplied(o); discTouched.current = true; setDisc(cfg.pct); }}
+                      style={{ border: "none", background: C.amber, color: "#fff", borderRadius: 7, padding: "4px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
+                      Apply {cfg.pct}% off
+                    </button>
+                  ))}
+                </div>
+              );
+            })}
+            {matched && !matched.birthday && onUpdateCustomer && (
+              quickBday === null ? (
+                <button type="button" onClick={() => setQuickBday("")}
+                  style={{ alignSelf: "flex-start", border: "none", background: "none", color: C.tealDark, fontSize: 11.5, fontWeight: 600, cursor: "pointer", padding: 0 }}>
+                  🎂 Add {matched.first_name}'s birthday (for wishes & offers)
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <DayMonthInput value={quickBday} onChange={setQuickBday} />
+                  <button type="button" disabled={!occasionValue(quickBday)}
+                    onClick={async () => { if (await onUpdateCustomer(matched.id, { birthday: occasionValue(quickBday) }, "Birthday saved")) setQuickBday(null); }}
+                    style={{ border: "none", background: occasionValue(quickBday) ? C.teal : C.border, color: "#fff", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Save</button>
+                  <button type="button" onClick={() => setQuickBday(null)} style={{ border: "none", background: "none", color: C.textFaint, cursor: "pointer", fontSize: 12 }}>Cancel</button>
+                </div>
+              )
+            )}
+            {!matched && isNewCustomer && (
+              showDates ? (
+                <div className="grid gap-2" style={{ gridTemplateColumns: "1fr" }}>
+                  <div><label style={posLbl}>Birthday <span style={{ textTransform: "none", fontWeight: 500, color: C.textFaint }}>(optional · for offers)</span></label>
+                    <DayMonthInput value={newBday} onChange={setNewBday} /></div>
+                  <div><label style={posLbl}>Anniversary <span style={{ textTransform: "none", fontWeight: 500, color: C.textFaint }}>(optional)</span></label>
+                    <DayMonthInput value={newAnniv} onChange={setNewAnniv} /></div>
+                </div>
+              ) : (
+                <button type="button" onClick={() => setShowDates(true)}
+                  style={{ alignSelf: "flex-start", border: "none", background: "none", color: C.tealDark, fontSize: 11.5, fontWeight: 600, cursor: "pointer", padding: 0 }}>
+                  🎂 + Birthday / anniversary (for wishes & offers)
+                </button>
+              )
+            )}
             {matched && customerInfo && (customerInfo.due > 0 || customerInfo.last) && (
               <div className="rounded-xl" style={{ background: "#fff", border: `1px solid ${customerInfo.due > 0 ? C.red + "44" : C.border}`, padding: "8px 12px", fontSize: 12 }}>
                 <div className="flex items-center justify-between gap-2 flex-wrap">

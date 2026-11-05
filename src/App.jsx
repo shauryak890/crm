@@ -258,7 +258,7 @@ export default function App() {
       setInvoiceOrder(o);
       return true;
     } catch (e) {
-      toast("Could not save order: " + e.message);
+      toast("Could not save order: " + schemaHint(e));
       return false;
     }
   };
@@ -389,9 +389,26 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
   const onMarkDelayNotified = async (id) => {
     try { await api.markDelayNotified(id); await refresh(); } catch {/* best-effort */}
   };
+  // Birthday/anniversary columns come from supabase/occasions.sql — if it
+  // hasn't been run yet, say so instead of a raw schema-cache error.
+  const schemaHint = (e) => (/birthday|anniversary|wished_year|occasion_offer/i.test(e.message) && /column|schema/i.test(e.message)
+    ? "Birthday/anniversary fields need a one-time database update (supabase/occasions.sql)." : e.message);
+  const onUpdateCustomer = async (id, fields, msg = "Customer updated") => {
+    try {
+      const updated = await api.updateCustomer(id, fields);
+      setCustomers((p) => p.map((c) => (c.id === id ? { ...c, ...updated } : c)));
+      if (msg) toast(msg);
+      return true;
+    } catch (e) { toast("Could not update: " + schemaHint(e)); return false; }
+  };
+  const onMarkWished = async (c, kind, year) => {
+    setCustomers((p) => p.map((x) => (x.id === c.id ? { ...x, [`${kind}_wished_year`]: year } : x)));
+    try { await api.markOccasionWished(c.id, kind, year); }
+    catch (e) { toast("Could not save that the wish was sent: " + schemaHint(e)); }
+  };
   const onAddCustomer = async (c) => {
     try { await api.createCustomer(c); toast("Customer added"); await refresh(); return true; }
-    catch (e) { toast("Could not add: " + e.message); return false; }
+    catch (e) { toast("Could not add: " + schemaHint(e)); return false; }
   };
   // Quick-add a brand-new product from the POS counter (admin only).
   // Saves to the catalogue and returns the created product so the POS can
@@ -586,7 +603,7 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
           {view === "pos" && <POS products={products} customers={customers} orders={orders} onPay={onPay} profile={profile} focusMode={focusMode} setFocusMode={setFocusMode} isAdmin={isAdmin} onQuickAddProduct={onQuickAddProduct}
             isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId}
             subscriptions={subscriptions} onUseSubscription={onUseSubscription}
-            subscriptionPlans={subscriptionPlans} onSellSubscription={onSellSubscription} orderItems={orderItems} intent={navIntent} />}
+            subscriptionPlans={subscriptionPlans} onSellSubscription={onSellSubscription} orderItems={orderItems} intent={navIntent} onUpdateCustomer={onUpdateCustomer} />}
           {view === "sales" && <Sales orders={orders} loading={loading} products={products} isAdmin={isAdmin} intent={navIntent}
             isSuperAdmin={isSuperAdmin} outlets={outlets} onDeleteOrder={onDeleteOrder}
             onStatus={onStatus} onCollectPayment={onCollectPayment} onResetPayment={onResetPayment} onOpenInvoice={setInvoiceOrder}
@@ -595,7 +612,7 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
           {view === "orderstatus" && <OrderStatus orders={orders} onStatus={onStatus} onOpenInvoice={setInvoiceOrder} />}
           {view === "delivery" && <Delivery orders={orders} onStatus={onStatus} onCollectPayment={onCollectPayment} onResetPayment={onResetPayment}
             isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} outlets={outlets} intent={navIntent} onOpenInvoice={setInvoiceOrder} />}
-          {view === "customers" && <Customers customers={customers} orders={orders} subscriptions={subscriptions} loading={loading} onAdd={onAddCustomer}
+          {view === "customers" && <Customers customers={customers} orders={orders} subscriptions={subscriptions} loading={loading} onAdd={onAddCustomer} onUpdateCustomer={onUpdateCustomer} onMarkWished={onMarkWished}
             isSuperAdmin={isSuperAdmin} outlets={outlets} onOpenInvoice={setInvoiceOrder} initialQuery={customerQuery} intent={navIntent}
             onCollectPayment={onCollectPayment} onResetPayment={onResetPayment} isAdmin={isAdmin} go={go} />}
           {view === "supplies" && <Supplies profile={profile} toast={toast} onChanged={refresh} isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId} />}
