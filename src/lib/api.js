@@ -417,7 +417,7 @@ export async function deleteProduct(id) {
 export async function fetchOrderItems() {
   return fetchAll(() => supabase
     .from("order_items")
-    .select("product_name, qty, unit, order_id")
+    .select("product_name, qty, unit, order_id, unit_price")
     .order("id"));
 }
 
@@ -933,4 +933,133 @@ export async function updateOffer(id, patch) {
 export async function deleteOffer(id) {
   const { error } = await supabase.from("offers").delete().eq("id", id);
   if (error) throw error;
+}
+
+/* ── Brighty ───────────────────────────────────────────────────
+   Tables from supabase/assistant.sql. Every call throws the raw error so
+   the UI can tell "table not created yet" apart from a real failure. */
+export const isMissingTable = (e) => /assistant_(knowledge|questions)/i.test(e?.message || "") && /(does not exist|schema cache|not find)/i.test(e?.message || "");
+
+export async function fetchAssistantKnowledge() {
+  return fetchAll(() => supabase
+    .from("assistant_knowledge")
+    .select("*")
+    .order("sort", { ascending: true })
+    .order("id"));
+}
+
+export async function saveAssistantKnowledge(row) {
+  const { id, ...fields } = row;
+  const payload = { ...fields, updated_at: new Date().toISOString() };
+  const q = id
+    ? supabase.from("assistant_knowledge").update(payload).eq("id", id)
+    : supabase.from("assistant_knowledge").insert(payload);
+  const { data, error } = await q.select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteAssistantKnowledge(id) {
+  const { error } = await supabase.from("assistant_knowledge").delete().eq("id", id);
+  if (error) throw error;
+}
+
+export async function createAssistantQuestion(q) {
+  const { data, error } = await supabase.from("assistant_questions").insert(q).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function fetchAssistantQuestions({ limit = 300 } = {}) {
+  const { data, error } = await supabase
+    .from("assistant_questions")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return data;
+}
+
+export async function updateAssistantQuestion(id, fields) {
+  const { data, error } = await supabase.from("assistant_questions").update(fields).eq("id", id).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// Attach the bill a "price to confirm" item went onto.
+export async function linkAssistantQuestions(ids, order) {
+  if (!ids?.length || !order?.id) return;
+  const { error } = await supabase.from("assistant_questions")
+    .update({ order_id: order.id, order_label: order.order_label || String(order.order_no || "") })
+    .in("id", ids);
+  if (error) throw error;
+}
+
+export async function markAssistantAnswersSeen(ids) {
+  if (!ids?.length) return;
+  const { error } = await supabase.from("assistant_questions").update({ seen_by_asker: true }).in("id", ids);
+  if (error) throw error;
+}
+
+export function subscribeAssistantQuestions(onChange, name = "assistant-questions") {
+  return supabase
+    .channel(name)
+    .on("postgres_changes", { event: "*", schema: "public", table: "assistant_questions" }, (payload) => onChange(payload))
+    .subscribe();
+}
+
+/* ── Brighty: reference photos (supabase/assistant_v2.sql) ───── */
+export const isMissingPhotos = (e) => /assistant_photos|assistant-photos|bucket not found/i.test(e?.message || "") && /(does not exist|schema cache|not find|not found)/i.test(e?.message || "");
+
+export async function fetchAssistantPhotos({ withImages = false } = {}) {
+  return fetchAll(() => supabase
+    .from("assistant_photos")
+    .select(withImages ? "id, knowledge_id, label, emb, emb_scale, image_url, source, added_by, added_by_name, created_at" : "id, knowledge_id, emb, emb_scale")
+    .order("created_at", { ascending: false })
+    .order("id"));
+}
+
+export async function uploadAssistantPhoto(blob) {
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  const { error } = await supabase.storage.from("assistant-photos").upload(path, blob, { contentType: "image/jpeg" });
+  if (error) throw error;
+  return supabase.storage.from("assistant-photos").getPublicUrl(path).data.publicUrl;
+}
+
+export async function saveAssistantPhoto(row) {
+  const { data, error } = await supabase.from("assistant_photos").insert(row).select("id, knowledge_id, label, emb, emb_scale, image_url, source, added_by_name, created_at").single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteAssistantPhoto(photo) {
+  const { error } = await supabase.from("assistant_photos").delete().eq("id", photo.id);
+  if (error) throw error;
+  const path = String(photo.image_url || "").split("/assistant-photos/")[1];
+  if (path) await supabase.storage.from("assistant-photos").remove([decodeURIComponent(path)]).catch(() => {});
+}
+
+export async function deleteAssistantQuestion(id) {
+  const { error } = await supabase.from("assistant_questions").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ── Brighty: self-learning (supabase/assistant_v2.sql) ──────── */
+export async function fetchAssistantLearning() {
+  return fetchAll(() => supabase.from("assistant_learning").select("id, phrase, knowledge_id, picks, last_used").order("picks", { ascending: false }).order("id"));
+}
+export async function learnAssistant(phrase, knowledgeId) {
+  const { error } = await supabase.rpc("assistant_learn", { p_phrase: phrase, p_knowledge: knowledgeId });
+  if (error) throw error;
+}
+export async function deleteAssistantLearning(id) {
+  const { error } = await supabase.from("assistant_learning").delete().eq("id", id);
+  if (error) throw error;
+}
+// Generic live updates for a table (used for the assistant's price list).
+export function subscribeTable(table, onChange, name = `table-${table}`) {
+  return supabase
+    .channel(name)
+    .on("postgres_changes", { event: "*", schema: "public", table }, (payload) => onChange(payload))
+    .subscribe();
 }

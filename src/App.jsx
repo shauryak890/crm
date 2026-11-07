@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard, ShoppingCart, ReceiptText, Truck, Users as UsersIcon, UserCog,
   BarChart3, ClipboardList, Settings as SettingsIcon, Smartphone, MapPin, Search, Bell,
-  Menu, Check, X, LogOut, Tag, Lock, Minimize2, PackagePlus, Wallet, BadgePercent,
+  Menu, Check, X, LogOut, Tag, Lock, Minimize2, PackagePlus, Wallet, BadgePercent, Sparkles,
 } from "lucide-react";
 
 import { C, DISPLAY, inr, collected, balanceDue, orderRef, localIsoDate, isDelivered, isCancelled, APP_LIFECYCLE_LABEL } from "./theme";
@@ -31,6 +31,7 @@ import Invoice from "./components/Invoice";
 import DeliveryAlert from "./components/DeliveryAlert";
 import GlobalSearch from "./components/GlobalSearch";
 import HQPanel from "./pages/hq/HQPanel";
+import Assistant from "./components/Assistant";
 
 const NAV = [
   { section: "Operations", items: [
@@ -128,6 +129,16 @@ export default function App() {
   const [invoiceOrder, setInvoiceOrder] = useState(null);
   const [focusMode, setFocusMode] = useState(false);
   const [customerQuery, setCustomerQuery] = useState(""); // pre-fills Customers search (from header search)
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantUnread, setAssistantUnread] = useState(0);
+  // Ctrl+J (⌘J on Mac) opens / closes Brighty, the assistant, from any page.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "j") { e.preventDefault(); setAssistantOpen((o) => !o); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // HQ is reached only via the URL hash #hq — there is no button or nav
   // link anywhere in the app. Even with the hash, it only opens for a
@@ -256,7 +267,7 @@ export default function App() {
       toast(`Order #${orderRef(o)} billed · ${inr(o.total)}`);
       await refresh();
       setInvoiceOrder(o);
-      return true;
+      return o;
     } catch (e) {
       toast("Could not save order: " + schemaHint(e));
       return false;
@@ -584,13 +595,21 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
             onOpenOrder={setInvoiceOrder}
             onOpenCustomer={(c) => { setCustomerQuery(c.phone || c.code || c.first_name); go("customers"); }} />
 
+          <div className="flex items-center" style={{ gap: 10 }}>
+          <button className="wb-ai-launch" onClick={() => setAssistantOpen((o) => !o)} title="Ask Brighty (Ctrl+J)">
+            <span className="wb-ai-orb"><Sparkles size={15} /></span>
+            <span className="wb-ai-launch-text">Ask Brighty</span>
+            <kbd>Ctrl J</kbd>
+            {assistantUnread > 0 && <span className="wb-ai-badge">{assistantUnread}</span>}
+          </button>
           {/* Profile chip — info only, no chevron / no menu */}
-          <div className="flex items-center gap-2" style={{ paddingLeft: 8, paddingRight: 12, height: 40, borderRadius: 12, background: C.bg, border: `1px solid ${C.border}` }}>
+          <div className="wb-profile-chip flex items-center gap-2" style={{ paddingLeft: 8, paddingRight: 12, height: 40, borderRadius: 12, background: C.bg, border: `1px solid ${C.border}` }}>
             <div className="flex items-center justify-center rounded-full" style={{ width: 28, height: 28, background: C.navy, color: "#fff", fontWeight: 600, fontSize: 12 }}>{(displayName || "W")[0].toUpperCase()}</div>
             <div className="wb-hide-sm" style={{ lineHeight: 1.1 }}>
               <p style={{ fontSize: 12.5, fontWeight: 600, color: C.navy, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayName}</p>
               <p style={{ fontSize: 10, color: C.textFaint, marginTop: 2, fontWeight: 500 }}>{roleLabel}</p>
             </div>
+          </div>
           </div>
         </header>}
 
@@ -632,6 +651,11 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
         </main>
       </div>
 
+      <Assistant open={assistantOpen} onClose={() => setAssistantOpen(false)} profile={profile}
+        products={products} orders={orders} orderItems={orderItems} outlets={outlets}
+        isSuperAdmin={isSuperAdmin} billingOutletId={billingOutletId} go={go} toast={toast}
+        onUnreadChange={setAssistantUnread} />
+
       {sidebar && <div onClick={() => setSidebar(false)} style={{ position: "fixed", inset: 0, background: "rgba(10,34,49,.45)", zIndex: 35 }} />}
 
       {invoiceOrder && (
@@ -647,7 +671,7 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
 
       {/* Hidden on the counter screens, where its corner sits on top of
           the Pay / Send buttons. */}
-      {view !== "pos" && view !== "supplies" && view !== "delivery" && (
+      {view !== "pos" && view !== "supplies" && view !== "delivery" && !assistantOpen && (
         <DeliveryAlert orders={orders} onJump={() => go("delivery")} />
       )}
 

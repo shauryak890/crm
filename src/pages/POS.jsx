@@ -9,6 +9,7 @@ import { Card, PageHead, Btn, iconBtn, Modal, field, fieldLabel, useEscape } fro
 import { DayMonthInput, occasionValue } from "../components/kit";
 import { OCCASIONS, occasionInfo } from "../lib/occasions";
 import CameraCapture from "../components/CameraCapture";
+import { drainBill, BILL_EVENT } from "../lib/billBridge";
 
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 
@@ -402,6 +403,17 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
       : Math.round(Number(e.unit_price) * e.qty * m);
     return { ...e, line_total };
   };
+  // Lines sent from Brighty ("Add to bill") land in the cart,
+  // whether the POS was already open or opened because of them.
+  useEffect(() => {
+    const take = () => {
+      const lines = drainBill();
+      if (lines.length) setCart((c) => [...c, ...lines.map((l, i) => repriceLine({ ...l, key: Date.now() + i }))]);
+    };
+    take();
+    window.addEventListener(BILL_EVENT, take);
+    return () => window.removeEventListener(BILL_EVENT, take);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const bumpQty = (key, d) => setCart((c) => c.map((x) => (x.key === key ? repriceLine({ ...x, qty: Math.max(1, (Number(x.qty) || 1) + d) }) : x)));
 
   // Open the service picker for a product, pre-selecting the service type
@@ -619,9 +631,12 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
       };
       // Strip frontend-only fields (`key`, `addons`) — they aren't columns
       // on order_items. `service_type` already holds the combined label.
-      const items = cart.map(({ key, addons, ...rest }) => rest);
+      const items = cart.map(({ key, addons, ptc, qid, ...rest }) => rest);
       const ok = await onPay(order, items);
       if (ok) {
+        // "Price to confirm" items: tell HQ which bill they went on.
+        const qids = cart.filter((i) => i.qid).map((i) => i.qid);
+        if (qids.length && ok?.id) api.linkAssistantQuestions(qids, ok).catch((e) => console.warn("link assistant questions failed:", e.message));
         if (activeSubscription && subKgCovered > 0) {
           onUseSubscription && onUseSubscription(activeSubscription, subKgCovered);
         }
@@ -998,7 +1013,10 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
             ) : cart.map((i) => (
               <div key={i.key} className="flex items-center justify-between" style={{ padding: "13px 18px", borderBottom: `1px solid ${C.borderSoft}` }}>
                 <div>
-                  <p style={{ fontWeight: 700, fontSize: 13.5, color: C.navy }}>{i.product_name}</p>
+                  <p style={{ fontWeight: 700, fontSize: 13.5, color: C.navy }}>
+                    {i.product_name}
+                    {i.ptc && <span title="HQ will confirm this price before pickup" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#9A6514", background: C.amberLt, padding: "2px 7px", borderRadius: 99, verticalAlign: 2 }}>PRICE TO CONFIRM</span>}
+                  </p>
                   <p style={{ fontSize: 11.5, color: C.textFaint, marginTop: 2 }}>
                     {i.service_type} · {i.express ? "Express" : "Normal"} ·{" "}
                     {i.unit === "kg" ? `${i.weight_kg} kg (${i.qty} pcs)` : `×${i.qty}`}

@@ -105,7 +105,8 @@ function OutletCompare({ rows, period, onOpen }) {
   );
 }
 import HQOffers from "./HQOffers";
-import { Tag } from "lucide-react";
+import HQAssistant from "./HQAssistant";
+import { Tag, Sparkles } from "lucide-react";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const PIE = [C.teal, C.navy, C.tealMid, C.amber, C.green, "#8FA6B4"];
@@ -165,6 +166,17 @@ export default function HQPanel({ profile, onExit }) {
 
   const [selected, setSelected] = useState(null);   // outlet drill-down
   const [view, setView] = useState("network");        // 'network' | 'customers'
+  // Questions from the outlets still waiting on HQ (Brighty).
+  const [aiOpen, setAiOpen] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const count = () => api.fetchAssistantQuestions({ limit: 200 })
+      .then((q) => alive && setAiOpen(q.filter((x) => x.status === "open").length))
+      .catch(() => {});
+    count();
+    const t = setInterval(count, 60000);
+    return () => { alive = false; clearInterval(t); };
+  }, [view]);
   const [expandedCust, setExpandedCust] = useState(null); // app-customer drill-down
   const [addOpen, setAddOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_OUTLET);
@@ -603,6 +615,19 @@ export default function HQPanel({ profile, onExit }) {
     );
   }
 
+  /* ---- Brighty: questions from outlets + price list ---- */
+  if (view === "assistant") {
+    return (
+      <Shell profile={profile} onExit={onExit} logout={logout} toast={toastMsg}
+        crumb={<button onClick={() => setView("network")} className="wb-press inline-flex items-center gap-1"
+          style={{ background: "transparent", border: "none", color: C.tealMid, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          <ArrowLeft size={14} /> Network
+        </button>}>
+        <HQAssistant toast={toast} profile={profile} />
+      </Shell>
+    );
+  }
+
   /* ---- Network overview ---- */
   return (
     <Shell profile={profile} onExit={onExit} logout={logout} toast={toastMsg}>
@@ -616,6 +641,7 @@ export default function HQPanel({ profile, onExit }) {
           <PeriodStepper value={period} onChange={setPeriod} dark modes={["day", "week", "month", "year", "all", "custom"]} />
           <Btn variant="ghost" icon={UsersIcon} onClick={() => setView("customers")}>App customers</Btn>
           <Btn variant="ghost" icon={Tag} onClick={() => setView("offers")}>Offers</Btn>
+          <Btn variant="ghost" icon={Sparkles} onClick={() => setView("assistant")}>Brighty{aiOpen ? ` · ${aiOpen}` : ""}</Btn>
           <Btn variant="primary" icon={Plus} onClick={() => { setForm(EMPTY_OUTLET); setFormErr(""); setAddOpen(true); }}>New outlet</Btn>
         </div>
       </div>

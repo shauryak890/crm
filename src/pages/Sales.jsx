@@ -33,7 +33,7 @@ export default function Sales({
   const [editOrder, setEditOrder] = useState(null);     // full edit
   const [dateOrder, setDateOrder] = useState(null);     // delivery-date change
   const [payOrder, setPayOrder] = useState(null);       // collect payment
-  const [detailId, setDetailId] = useState(null);       // side drawer
+  const [detailId, setDetailId] = useState(intent?.orderId || null);       // side drawer (the Assistant can open one)
   const [storedPeriod, setPeriod] = usePeriod("sales", "day");
   const [chip, setChip] = useState(intent?.chip || "all");
   const [outletId, setOutletId] = usePersistentState("sales:outlet", "");
