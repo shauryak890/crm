@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Search, Shirt, ShoppingCart, Trash2, Banknote, Printer, X, Plus, UserCheck, Camera, FileText, Pencil,
-  Users as UsersIcon, Maximize2, Minimize2, Image as ImageIcon, BadgePercent, Store,
+  Users as UsersIcon, Maximize2, Minimize2, Image as ImageIcon, BadgePercent, Store, Sparkles,
 } from "lucide-react";
 import { C, DISPLAY, STORE, SERVICE_TYPES, PAYMENT_METHODS, DAILY_CAPACITY, inr, localIsoDate, normPhone, isValidPhone, isCancelled, balanceDue, orderRef, fmtDay as fmtShortDate } from "../theme";
 import * as api from "../lib/api";
@@ -9,7 +9,7 @@ import { Card, PageHead, Btn, iconBtn, Modal, field, fieldLabel, useEscape } fro
 import { DayMonthInput, occasionValue } from "../components/kit";
 import { OCCASIONS, occasionInfo } from "../lib/occasions";
 import CameraCapture from "../components/CameraCapture";
-import { drainBill, BILL_EVENT } from "../lib/billBridge";
+import { drainBill, BILL_EVENT, askBrighty } from "../lib/billBridge";
 
 const fmtDate = (s) => s ? new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 
@@ -715,6 +715,19 @@ export default function POS({ products, customers, orders = [], onPay, profile, 
             {isSuperAdmin && !billingOutletId ? (
               <div style={{ gridColumn: "1/-1", padding: "48px 16px", textAlign: "center", color: C.textFaint, fontSize: 13.5, lineHeight: 1.6 }}>
                 Select a <b style={{ color: C.navy }}>billing outlet</b> (top of the cart) to load its catalogue.
+              </div>
+            ) : visible.length === 0 && search.trim() ? (
+              // Nothing matches what was typed: hand the words to Brighty, which
+              // knows spellings, Hinglish and items that aren't in the catalogue.
+              <div style={{ gridColumn: "1/-1", padding: "36px 16px", textAlign: "center", color: C.textMute, fontSize: 13.5, lineHeight: 1.6 }}>
+                No item called “{search.trim()}” here.
+                <div style={{ marginTop: 12 }}>
+                  <button type="button" className="wb-ai-launch" style={{ margin: "0 auto" }}
+                    onClick={() => askBrighty(search.trim())}>
+                    <span className="wb-ai-orb"><Sparkles size={15} /></span>
+                    <span>Ask Brighty the price of “{search.trim()}”</span>
+                  </button>
+                </div>
               </div>
             ) : visible.length === 0 ? (
               <div style={{ gridColumn: "1/-1", padding: "48px 0", textAlign: "center", color: C.textFaint, fontSize: 13 }}>

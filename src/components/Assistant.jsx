@@ -9,7 +9,7 @@ import { C, inr, fmtDateTime, fmtDate, localIsoDate, collected, balanceDue, isCa
 import * as api from "../lib/api";
 import { useEscape } from "./ui";
 import "./assistant.css";
-import { sendToBill } from "../lib/billBridge";
+import { sendToBill, ASK_EVENT } from "../lib/billBridge";
 import {
   buildIndex, answer, answerWithService, narrow, applyPick, lineFor, toCartLine, quoteText, memoForRow, learnKey, buildLearned,
   fmtPrice, unitLabel, safeEstimate, productRows, answeredRows, SERVICE_LABEL, EXPRESS_MULTIPLIER,
@@ -20,12 +20,16 @@ import {
 
 const EXAMPLES = [
   "lehenga heavy kitna lagega?",
-  "3 piece suit rate",
+  "new customer 2 saree heavy",
   "120 shirt 60 pant press urgent",
+  "kids ke sab rate",
   "pickup ka rule kya hai?",
-  "kambal double",
-  "5 kg wash and fold",
+  "aaj ka sale",
+  "due today",
+  "bill kaise banaye?",
 ];
+const PAGE_LABEL = { pos: "Point of Sale", sales: "Sales", delivery: "Delivery List", orderstatus: "Order Status", customers: "Customers", subscriptions: "Subscriptions",
+  expenses: "Expenses", supplies: "Reorder Stock", apporders: "App Orders", settings: "Settings", dashboard: "Dashboard" };
 const isKnowledgeId = (id) => /^[0-9a-f-]{36}$/i.test(String(id || ""));
 const HEAVY_GRADES = ["heavy", "bridal", "designer"];
 const PLAIN_GRADES = ["normal", "single", "small"];
@@ -139,13 +143,27 @@ export default function Assistant({ open, onClose, profile, products = [], order
     return oid ? orders.filter((o) => o.outlet_id === oid) : orders;
   }, [orders, isSuperAdmin, billingOutletId]);
   const learned = useMemo(() => buildLearned(learnedRows), [learnedRows]);
-  const ctx = useMemo(() => ({ index, fallback, learned, products: outletProducts, orderItems: datedItems, orders: scopedOrders }),
-    [index, fallback, learned, outletProducts, datedItems, scopedOrders]);
+  const outlet = useMemo(() => {
+    const oid = isSuperAdmin ? billingOutletId : profile?.outlet_id;
+    const o = outlets.find((x) => x.id === oid);
+    return o ? { name: o.name, address: o.address, phone: o.phone } : null;
+  }, [outlets, isSuperAdmin, billingOutletId, profile]);
+  const allOutlets = useMemo(() => outlets.map((o) => ({ name: o.name, address: o.address, phone: o.phone })), [outlets]);
+  const ctx = useMemo(() => ({ index, fallback, learned, products: outletProducts, orderItems: datedItems, orders: scopedOrders, outlet, allOutlets }),
+    [index, fallback, learned, outletProducts, datedItems, scopedOrders, outlet, allOutlets]);
   const outletName = useMemo(() => {
     const oid = isSuperAdmin ? billingOutletId : profile?.outlet_id;
     return outlets.find((o) => o.id === oid)?.name?.replace(/^Patna\s*-\s*/i, "") || "";
   }, [outlets, isSuperAdmin, billingOutletId, profile]);
   const rowById = useCallback((id) => index.prices.find((r) => r.id === id), [index]);
+
+  // Questions handed over from other screens ("Ask Brighty the price of …").
+  const askRef = useRef(null);
+  useEffect(() => {
+    const onAsk = (e) => { const t = String(e.detail || "").trim(); if (t) setTimeout(() => askRef.current?.(t), 350); };
+    window.addEventListener(ASK_EVENT, onAsk);
+    return () => window.removeEventListener(ASK_EVENT, onAsk);
+  }, []);
 
   /* chat */
   useEffect(() => {
@@ -168,13 +186,38 @@ export default function Assistant({ open, onClose, profile, products = [], order
   const ask = (text) => {
     const t = String(text || "").trim();
     if (!t || thinking !== null) return;
+    setTab("chat");
     setMessages((m) => [...m, mk("user", { text: t })]);
     setInput("");
-    const res = answer(t, { ...ctx, prev: prevMemo.current });
+    const res = answer(t, { ...ctx, prev: prevMemo.current, today: localIsoDate() });
+    logAsk(t, res);
     // A photo the assistant couldn't name: the next item typed names it.
     const photo = pendingPhoto.current && (res.type === "answer" || res.type === "clarify") ? pendingPhoto.current : null;
     if (photo) pendingPhoto.current = null;
     botSay({ res, text: t, photo });
+  };
+
+  askRef.current = ask;
+
+  // Every question is noted (text + how it was answered) so HQ can see what
+  // each outlet asks and what Brighty couldn't answer. Never blocks the chat.
+  const logAsk = (text, res) => {
+    const line = res.type === "answer" ? res.lines?.[0] : null;
+    api.logAssistantAsk({
+      question: String(text).slice(0, 300),
+      result: res.type === "answer" && res.fromFallback ? "answer-catalogue" : res.type,
+      matched: line ? line.row.label : res.type === "policy" ? res.policy.item : res.type === "clarify" ? res.step?.question : null,
+      missed_words: res.type === "unknown" ? (res.words || []).join(" ").slice(0, 120) || null : null,
+      asker: profile?.name || profile?.email || null,
+      ...(isSuperAdmin && billingOutletId ? { outlet_id: billingOutletId } : {}),
+    }).catch(() => {});
+  };
+
+  // A whole section of the price list ("Dry Clean · Men").
+  const showSection = (name) => {
+    setMessages((m) => [...m, mk("user", { text: name, tap: true })]);
+    const rows = index.prices.filter((r) => (r.section || r.service || "Other") === name);
+    botSay({ res: { type: "list", title: name, total: rows.length, rows: rows.slice(0, 80) }, text: name }, 250);
   };
 
   // One vote: these words → this item. Enough agreeing votes and the
@@ -417,7 +460,8 @@ export default function Assistant({ open, onClose, profile, products = [], order
               ? <UserBubble key={m.id} text={m.text} tap={m.tap} image={m.image} />
               : <BotMessage key={m.id} msg={m} ctx={ctx} outletName={outletName} onPick={pick} onShowRow={showRow} onAsk={ask}
                   onAskHQ={askHQ} onAddToBill={addToBill} toast={toast} qMissing={qMissing} onTeach={teach}
-                  canTeach={!photosMissing} onOpenBill={openBill} />)}
+                  canTeach={!photosMissing} onOpenBill={openBill} onSection={showSection}
+                  onGo={(v) => { go?.(v); onClose(); }} />)}
             {thinking !== null && <Thinking text={thinking} />}
           </div>
           <form onSubmit={(e) => { e.preventDefault(); ask(input); }} className="wb-ai-composer" style={{ position: "relative" }}>
@@ -550,8 +594,35 @@ function BotMessage(props) {
   const head = msg.photo ? <PhotoNote photo={msg.photo} /> : null;
   if (res.type === "greet") return <Welcome onPick={onAsk} />;
   if (res.type === "thanks") return <BotShell><p style={{ fontSize: 14 }}>Happy to help! Ask me anything else.</p></BotShell>;
-  if (res.type === "script") {
-    return <BotShell><p style={{ fontSize: 13.5, lineHeight: 1.5 }}>Please type in English letters (Hinglish), like <i>“lehenga kitna”</i>. I can't read Devanagari yet.</p></BotShell>;
+  if (res.type === "stats") return <StatsCard res={res} onOpenBill={props.onOpenBill} onGo={props.onGo} />;
+  if (res.type === "list") return <ListCard msg={msg} onShowRow={props.onShowRow} onSection={props.onSection} />;
+  if (res.type === "outlet") {
+    return (
+      <BotShell>
+        {(res.outlets || [res.outlet]).map((o, i) => (
+          <div key={o.name} style={{ marginTop: i ? 12 : 0 }}>
+            <p style={{ fontSize: 14.5, fontWeight: 700, color: C.navy }}>{o.name}</p>
+            {o.address && <p style={{ fontSize: 13.5, marginTop: 3, lineHeight: 1.5 }}>{o.address}</p>}
+            {o.phone && <p style={{ fontSize: 13.5, marginTop: 3 }}>Phone: <b>{o.phone}</b></p>}
+          </div>
+        ))}
+      </BotShell>
+    );
+  }
+  if (res.type === "customers") {
+    return (
+      <BotShell>
+        <p style={{ fontSize: 14, fontWeight: 600, color: C.navy }}>{res.people.length} customers match “{res.name}”. Which one?</p>
+        <div className="flex flex-wrap" style={{ gap: 7, marginTop: 10 }}>
+          {res.people.map((p) => (
+            <button key={p.phone} className="wb-ai-option" onClick={() => onAsk(p.phone)}>
+              <span>{p.name}</span>
+              <span className="wb-ai-option-sub">{p.phone} · {p.count} order{p.count === 1 ? "" : "s"}{p.due > 0 ? ` · ${inr(p.due)} due` : ""}</span>
+            </button>
+          ))}
+        </div>
+      </BotShell>
+    );
   }
   if (res.type === "photo-error") {
     return <BotShell><p style={{ fontSize: 13.5, lineHeight: 1.5 }}>I couldn't read that photo{res.message ? ` (${res.message})` : ""}. Try another photo, or type the item.</p></BotShell>;
@@ -567,7 +638,7 @@ function BotMessage(props) {
     );
   }
   if (res.type === "order" || res.type === "customer") return <OrderCard res={res} onOpenBill={props.onOpenBill} />;
-  if (res.type === "policy") return <PolicyCard res={res} onAsk={onAsk} onAskHQ={props.onAskHQ} text={msg.text} qMissing={props.qMissing} />;
+  if (res.type === "policy") return <PolicyCard res={res} onAsk={onAsk} onAskHQ={props.onAskHQ} text={msg.text} qMissing={props.qMissing} onGo={props.onGo} />;
   if (res.type === "clarify" || res.type === "clarify-quote") {
     const work = msg.photo?.analysis?.work?.level;
     const suggests = (o) => res.step.dim === "id" && o.grades && work && work !== "medium"
@@ -710,6 +781,12 @@ function AnswerCard({ msg, ctx, outletName, onAskHQ, onAddToBill, toast, qMissin
         </>
       )}
 
+      {res.offer && priced && (
+        <div className="wb-ai-offer">
+          <span>{res.offer.label} <b>−{res.offer.pct}%</b></span>
+          <span>Customer pays <b>{inr(Math.round(total * (1 - res.offer.pct / 100)))}</b></span>
+        </div>
+      )}
       {single && <Evidence line={single} />}
       {res.policyNote && (
         <div className="wb-ai-note" style={{ marginTop: 10 }}>
@@ -777,7 +854,7 @@ function Evidence({ line }) {
   );
 }
 
-function PolicyCard({ res, onAsk, onAskHQ, text, qMissing }) {
+function PolicyCard({ res, onAsk, onAskHQ, text, qMissing, onGo }) {
   const [sent, setSent] = useState(false);
   const p = res.policy;
   return (
@@ -791,6 +868,11 @@ function PolicyCard({ res, onAsk, onAskHQ, text, qMissing }) {
         <div className="flex flex-wrap" style={{ gap: 6, marginTop: 10 }}>
           <span style={{ fontSize: 11.5, color: C.textFaint, alignSelf: "center" }}>Related:</span>
           {res.also.map((a) => <button key={a.id} className="wb-ai-chip" onClick={() => onAsk(a.kws[0] || a.item)}>{a.item}</button>)}
+        </div>
+      )}
+      {p.go && PAGE_LABEL[p.go] && (
+        <div style={{ marginTop: 10 }}>
+          <button className="wb-ai-action primary" onClick={() => onGo(p.go)}>Open {PAGE_LABEL[p.go]} <ChevronRight size={13} /></button>
         </div>
       )}
       {p.pending && !qMissing && (
@@ -847,6 +929,96 @@ function OrderCard({ res, onOpenBill }) {
           );
         })}
       </div>
+    </BotShell>
+  );
+}
+
+function StatsCard({ res, onOpenBill, onGo }) {
+  return (
+    <BotShell>
+      <div className="flex items-center justify-between" style={{ gap: 8 }}>
+        <p style={{ fontSize: 14.5, fontWeight: 700, color: C.navy }}>{res.title}</p>
+        {res.count != null && <span className="wb-ai-st" style={{ color: C.tealDark, background: C.tealLight }}>{res.count} order{res.count === 1 ? "" : "s"}</span>}
+      </div>
+      {res.tiles && (
+        <div className="wb-ai-tiles">
+          {res.tiles.map((t) => (
+            <div key={t.k} className="wb-ai-tile">
+              <p style={{ fontSize: 11, color: C.textMute, fontWeight: 600 }}>{t.k}</p>
+              <p style={{ fontSize: 19, fontWeight: 800, color: C.navy, lineHeight: 1.2 }}>{t.v}</p>
+              <p style={{ fontSize: 11, color: C.textFaint }}>{t.sub}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {res.orders && (
+        <>
+          {res.toCollect > 0 && <p style={{ fontSize: 12.5, color: C.red, fontWeight: 600, marginTop: 6 }}>{inr(res.toCollect)} to collect in total</p>}
+          {!res.orders.length && <p style={{ fontSize: 13.5, color: C.textMute, marginTop: 6 }}>None. All clear.</p>}
+          {res.orders.length > 0 && (
+            <div className="wb-ai-quote" style={{ marginTop: 8 }}>
+              {res.orders.map((o) => (
+                <button key={o.id} className="wb-ai-listrow" onClick={() => onOpenBill(o.id)}>
+                  <span style={{ minWidth: 0 }}><b>#{o.label}</b> <span style={{ color: C.textMute }}>{o.name}</span><br />
+                    <span style={{ fontSize: 11.5, color: C.textFaint }}>due {fmtDate(o.due)} · {o.status}</span></span>
+                  <span style={{ fontWeight: 700, color: o.balance > 0 ? C.red : C.green, whiteSpace: "nowrap" }}>{o.balance > 0 ? inr(o.balance) : "paid"}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {res.count > res.orders.length && <p style={{ fontSize: 11.5, color: C.textFaint, marginTop: 5 }}>Showing {res.orders.length} of {res.count}.</p>}
+        </>
+      )}
+      {res.go && PAGE_LABEL[res.go] && (
+        <button className="wb-ai-action" style={{ marginTop: 10 }} onClick={() => onGo(res.go)}>Open {PAGE_LABEL[res.go]} <ChevronRight size={13} /></button>
+      )}
+    </BotShell>
+  );
+}
+
+function ListCard({ msg, onShowRow, onSection }) {
+  const res = msg.res;
+  if (res.sections) {
+    return (
+      <BotShell>
+        <p style={{ fontSize: 14, fontWeight: 600, color: C.navy }}>Which part of the price list?</p>
+        <div className="flex flex-wrap" style={{ gap: 7, marginTop: 10 }}>
+          {res.sections.map((x) => (
+            <button key={x.name} className="wb-ai-option" onClick={() => onSection(x.name)}>
+              <span>{x.name}</span><span className="wb-ai-option-sub">{x.count} items</span>
+            </button>
+          ))}
+        </div>
+      </BotShell>
+    );
+  }
+  const groups = [];
+  for (const r of res.rows) {
+    const g = r.section || SERVICE_LABEL[r.svcKey] || r.service || "Other";
+    const last = groups[groups.length - 1];
+    if (last && last.name === g) last.rows.push(r); else groups.push({ name: g, rows: [r] });
+  }
+  return (
+    <BotShell>
+      <div className="flex items-center justify-between" style={{ gap: 8 }}>
+        <p style={{ fontSize: 14.5, fontWeight: 700, color: C.navy, textTransform: "capitalize" }}>{res.title}</p>
+        <span className="wb-ai-st" style={{ color: C.tealDark, background: C.tealLight }}>{res.total} prices</span>
+      </div>
+      <p style={{ fontSize: 11.5, color: C.textFaint, marginTop: 2 }}>Tap a line to bill it or see where the price comes from.</p>
+      <div className="wb-ai-ratelist">
+        {groups.map((g) => (
+          <div key={g.name}>
+            {groups.length > 1 && <p className="wb-ai-ratehead">{g.name}</p>}
+            {g.rows.map((r) => (
+              <button key={r.id} className="wb-ai-listrow" onClick={() => onShowRow(msg, r)}>
+                <span style={{ minWidth: 0 }}>{r.item}{r.variant ? <span style={{ color: C.textMute }}> · {r.variant}</span> : null}</span>
+                <b style={{ color: C.navy, whiteSpace: "nowrap" }}>{fmtPrice(r)}</b>
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+      {res.total > res.rows.length && <p style={{ fontSize: 11.5, color: C.textFaint, marginTop: 5 }}>Showing {res.rows.length} of {res.total}. Add a word to narrow it, e.g. “kids press list”.</p>}
     </BotShell>
   );
 }

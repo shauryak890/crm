@@ -139,6 +139,12 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  // "Ask Brighty" buttons elsewhere (e.g. an empty POS search) open the panel.
+  useEffect(() => {
+    const onAsk = () => setAssistantOpen(true);
+    window.addEventListener("wb:ask-brighty", onAsk);
+    return () => window.removeEventListener("wb:ask-brighty", onAsk);
+  }, []);
 
   // HQ is reached only via the URL hash #hq — there is no button or nav
   // link anywhere in the app. Even with the hash, it only opens for a

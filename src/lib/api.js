@@ -1063,3 +1063,18 @@ export function subscribeTable(table, onChange, name = `table-${table}`) {
     .on("postgres_changes", { event: "*", schema: "public", table }, (payload) => onChange(payload))
     .subscribe();
 }
+
+/* ── Brighty: usage log (supabase/assistant_v3.sql) ──────────────────── */
+// One row per question asked, so HQ sees what each outlet asks and what
+// Brighty couldn't answer. Failing silently is fine: it's only a log.
+let logOff = false;
+export async function logAssistantAsk(row) {
+  if (logOff) return;
+  const { error } = await supabase.from("assistant_log").insert(row);
+  if (error) { if (/assistant_log|schema cache|does not exist/i.test(error.message)) logOff = true; throw error; }
+}
+export async function fetchAssistantLog(days = 30) {
+  const since = new Date(Date.now() - days * 864e5).toISOString();
+  return fetchAll(() => supabase.from("assistant_log").select("id, outlet_id, asker, question, result, matched, missed_words, created_at")
+    .gte("created_at", since).order("created_at", { ascending: false }).order("id"));
+}

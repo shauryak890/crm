@@ -4,7 +4,9 @@
 // needs a grade or service, and explains where every number came from.
 // It tries hard to answer by itself (price list → counter catalogue →
 // HQ's past answers → a safe size-based estimate) so HQ is the last stop.
-import { tokenize, nameTokens, hasDevanagari, GRADE_WORDS, SERVICE_WORDS, AUDIENCE_WORDS } from "./language";
+import { tokenize, nameTokens, romanize, skeleton, editDistance, GRADE_WORDS, SERVICE_WORDS, AUDIENCE_WORDS } from "./language";
+import { BUILTIN_RULES, BUILTIN_FACTS, EXTRA_KEYWORDS } from "./builtin";
+import { stripOffer, wantsList, dataIntent, outletIntent, customerByName } from "./intents";
 
 export const EXPRESS_MULTIPLIER = 1.6; // what the billing screen charges today
 
@@ -32,8 +34,8 @@ export function buildIndex(rows = []) {
   for (const r of rows) {
     if (!r || r.active === false) continue;
     if (r.kind === "policy") {
-      const kws = (r.keywords || []).map((k) => String(k).toLowerCase().trim()).filter(Boolean);
-      if (kws.length && r.answer) policies.push({ ...r, kws });
+      const p = makePolicy(r);
+      if (p) policies.push(p);
       continue;
     }
     if (!r.item) continue;
@@ -74,7 +76,21 @@ export function buildIndex(rows = []) {
     for (const w of vtok) { vocab.add(w); if (isGradeLike(w)) grades.add(w); }
     prices.push({ ...r, svcKey, audience, core, parts: parts.length ? parts : [[...core]], vtok: new Set(vtok), grades, label: r.variant ? `${r.item} · ${r.variant}` : r.item });
   }
+  // What ships with the app (how to use the CRM). A database rule with the
+  // same title replaces the built-in one, so HQ stays in charge.
+  const have = new Set(policies.map((p) => String(p.item).toLowerCase()));
+  for (const b of [...BUILTIN_RULES.map((x) => ({ ...x, howto: true })), ...BUILTIN_FACTS]) {
+    if (have.has(b.item.toLowerCase())) continue;
+    const p = makePolicy({ ...b, id: `builtin-${b.item}`, kind: "policy", source: "builtin" });
+    if (p) policies.push(p);
+  }
   return { prices, policies, vocab };
+}
+
+function makePolicy(r) {
+  const kws = [...new Set([...(r.keywords || []), ...(EXTRA_KEYWORDS[r.item] || [])].map((k) => String(k).toLowerCase().trim()).filter(Boolean))];
+  if (!kws.length || !r.answer) return null;
+  return { ...r, kws, kwWords: kws.map((k) => k.split(/\s+/)) };
 }
 
 /* ── Reading a message ───────────────────────────────────────────── */
@@ -114,18 +130,18 @@ function segment(tokens) {
 }
 
 function readSegment(seg, shared) {
-  const g = [], grades = [];
+  const g = [], grades = [], generic = [];
   let svc = null, aud = null, urgent = false;
   for (const w of seg.words) {
     if (w === "urgent") { urgent = true; continue; }
     if (MODIFIERS.has(w)) continue;
     if (SERVICE_WORDS[w]) { svc = w; continue; }
     if (AUDIENCE_WORDS[w]) { aud = AUDIENCE_WORDS[w]; continue; }
-    if (GENERIC.has(w)) continue;
+    if (GENERIC.has(w)) { generic.push(w); continue; }
     if (isGradeLike(w)) grades.push(w);
     g.push(w);
   }
-  return { garments: g, grades, svc: svc || shared.svc, aud: aud || shared.aud, urgent: urgent || shared.urgent, qty: seg.qty, kg: seg.kg };
+  return { garments: g, grades, generic, svc: svc || shared.svc, aud: aud || shared.aud, urgent: urgent || shared.urgent, qty: seg.qty, kg: seg.kg };
 }
 
 // "3piece" says which kind of suit, like a grade does.
@@ -401,12 +417,30 @@ export function lineFor(row, q, ctx, extra = {}) {
   };
 }
 
+// Does a typed word mean this keyword word? Exact, one typo, or same sound.
+function wordMatches(w, k) {
+  if (w === k) return true;
+  if (k.length >= 5 && Math.abs(w.length - k.length) <= 1 && editDistance(w, k, 1) <= 1) return true;
+  if (k.length >= 5 && w.length >= 4 && w[0] === k[0]) { const sk = skeleton(k); return sk.length >= 3 && skeleton(w) === sk; }
+  return false;
+}
+
+// Which rules / how-tos the message is about, best first. An exact phrase
+// counts fully; a misspelt one ("pikup", "delivry time") counts a bit less.
 function policyHits(text, index) {
-  const t = ` ${String(text).toLowerCase().replace(/[^a-z0-9₹%& ]+/g, " ").replace(/\s+/g, " ")} `;
-  return index.policies
-    .map((p) => ({ p, n: p.kws.filter((k) => t.includes(` ${k} `)).length }))
-    .filter((x) => x.n > 0)
-    .sort((a, b) => b.n - a.n);
+  const t = ` ${String(text).toLowerCase().replace(/[^a-z0-9₹%& ]+/g, " ").replace(/\s+/g, " ").trim()} `;
+  const words = t.trim().split(" ").filter(Boolean);
+  const out = [];
+  for (const p of index.policies) {
+    let n = 0, exact = 0;
+    p.kws.forEach((k, i) => {
+      const kw = p.kwWords[i];
+      if (t.includes(` ${k} `)) { n += 1 + 0.3 * (kw.length - 1); exact = Math.max(exact, kw.length); }
+      else if (k.length >= 5 && kw.every((x) => words.some((w) => wordMatches(w, x)))) n += 0.8 + 0.2 * (kw.length - 1);
+    });
+    if (n > 0) out.push({ p, n, exact });
+  }
+  return out.sort((a, b) => b.n - a.n);
 }
 
 const GREETING = /^\s*(hi+|hello+|hey+|namaste|namaskar|good (morning|afternoon|evening)|help|madad|kya kar sakte|what can you do)\b/i;
@@ -462,16 +496,27 @@ function lookup(text, ctx) {
  *   prev:     the last item asked about, for follow-ups ("aur heavy wala?")
  */
 export function answer(text, ctx) {
-  const raw = String(text || "").trim();
   const { index } = ctx;
-  if (!raw) return { type: "greet" };
-  if (hasDevanagari(raw) && !/[a-z]/i.test(raw)) return { type: "script" };
+  // Hindi script is read as Hinglish, so "लहंगा कितना" works like "lehenga kitna".
+  const raw = romanize(String(text || "").trim());
+  if (!raw || !/[a-z0-9]/i.test(raw)) return { type: "greet" };
   if (THANKS.test(raw)) return { type: "thanks" };
 
-  const found0 = lookup(raw, ctx);
-  if (found0) return found0;
+  // Things that aren't prices: a bill / phone number, today's numbers, the
+  // outlet's details, a customer by name.
+  const direct = lookup(raw, ctx) || dataIntent(raw, ctx) || outletIntent(raw, ctx) || customerByName(raw, ctx);
+  if (direct) return direct;
 
-  const tokens = tokenize(raw, new Set([...index.vocab, ...(ctx.fallback?.vocab || [])]));
+  const pol = policyHits(raw, index);
+  // "bill kaise banaye", "payment kaise le": a how-to phrase is never a price question.
+  if (pol[0]?.p.howto && pol[0].exact >= 2) return { type: "policy", policy: pol[0].p, also: pol.slice(1, 3).map((x) => x.p) };
+
+  // "new customer 2 saree" → the quote, with the first-order 25% taken off.
+  const { text: noOffer, offer } = stripOffer(raw);
+  const listText = wantsList(noOffer);
+  const work = listText != null ? listText : noOffer;
+
+  const tokens = tokenize(work, new Set([...index.vocab, ...(ctx.fallback?.vocab || [])]));
   const fuzzy = tokens.some((t) => t.fixed);
   const corrections = tokens.filter((t) => t.fixed).map((t) => ({ from: t.raw, to: t.word }));
   const allWords = tokens.filter((t) => t.word).map((t) => t.word);
@@ -481,7 +526,12 @@ export function answer(text, ctx) {
     urgent: allWords.includes("urgent"),
   };
   let segs = segment(tokens).map((s) => readSegment(s, shared)).filter((s) => s.garments.length || s.kg != null || s.svc);
-  const pol = policyHits(raw, index);
+
+  // "kids ke sab rate", "steam press rate list", "rate card"
+  if (listText != null) {
+    const list = listRows(index, segs[0], shared);
+    if (list) return list;
+  }
 
   // Follow-up: only a grade / service / qty / "urgent", no item — apply it
   // to the item asked about last ("aur heavy wala?", "steam press me?", "5 pcs").
@@ -538,7 +588,7 @@ export function answer(text, ctx) {
   }
 
   const policyNote = shared.urgent ? index.policies.find((p) => p.kws.includes("express")) : null;
-  const base = { fuzzy, corrections, policyNote, followUp };
+  const base = { fuzzy, corrections, policyNote, followUp, offer };
 
   if (found.length === 1) {
     const f = found[0];
@@ -578,6 +628,27 @@ export function answer(text, ctx) {
   };
 }
 
+// Every matching row for a "show me all" question, grouped for a rate table.
+function listRows(index, q, shared) {
+  const words = q ? itemWords(q) : [];
+  const svc = q?.svc || shared.svc, aud = q?.aud || shared.aud;
+  let rows;
+  if (words.length) rows = index.prices.filter((r) => words.some((w) => r.core.has(w)));
+  else if (svc || aud) rows = index.prices;
+  else {
+    const sections = distinct(index.prices, (r) => r.section || r.service || "Other")
+      .map((name) => ({ name, count: index.prices.filter((r) => (r.section || r.service || "Other") === name).length }));
+    return sections.length ? { type: "list", title: "Price list", sections } : null;
+  }
+  if (svc) rows = rows.filter((r) => r.svcKey === svc);
+  if (aud) rows = rows.filter((r) => r.audience === aud);
+  rows = rows.filter((r) => priceOf(r) != null || r.price_text);
+  if (!rows.length) return null;
+  rows.sort((a, b) => svcRank(a.svcKey) - svcRank(b.svcKey) || (a.sort ?? 0) - (b.sort ?? 0));
+  const title = [aud ? AUDIENCE_LABEL[aud] : null, svc ? SERVICE_LABEL[svc] : null, words.length ? words.join(" ") : null].filter(Boolean).join(" · ") || "Price list";
+  return { type: "list", title, total: rows.length, rows: rows.slice(0, 60) };
+}
+
 const memoOf = (q) => ({ garments: q.garments, grades: q.grades, svc: q.svc, aud: q.aud, urgent: q.urgent, qty: q.qty, kg: q.kg });
 export const memoForRow = (row, q = {}) => ({
   garments: [...(row.parts?.[0] || row.core || [])], grades: [...(row.grades || [])], svc: GARMENT_SERVICES.has(row.svcKey) ? row.svcKey : null,
@@ -589,25 +660,32 @@ export function answerWithService(text, svcKey, ctx) {
   return answer(`${text} ${svcKey}`, ctx);
 }
 
-// Closest items when nothing matched: share a word, or nearly do.
+// Closest items when nothing matched: share a word, sound alike, or share a
+// general word like "cover" / "jacket".
 function nearest(index, q) {
   const words = itemWords(q);
-  if (!words.length) return [];
+  const generic = q.generic || [];
+  if (!words.length && !generic.length) return [];
   const scored = [];
   for (const r of index.prices) {
     let s = 0;
+    const name = String(r.item).toLowerCase();
     for (const w of words) {
+      const sk = w.length >= 4 ? skeleton(w) : "";
       for (const c of r.core) {
         if (c === w) s += 3;
         else if (c.length > 3 && w.length > 3 && (c.startsWith(w.slice(0, 4)) || w.startsWith(c.slice(0, 4)))) s += 1.5;
+        else if (sk.length >= 3 && c[0] === w[0] && skeleton(c) === sk) s += 1.5;
       }
+      if (w.length >= 4 && name.includes(w)) s += 1;
     }
+    for (const w of generic) if (name.includes(w)) s += 1.2;
     if (q.svc && r.svcKey === q.svc) s += 0.5;
     if (s > 0) scored.push({ r, s });
   }
   scored.sort((a, b) => b.s - a.s);
   const seen = new Set();
-  return scored.map((x) => x.r).filter((r) => (seen.has(r.label) ? false : seen.add(r.label))).slice(0, 4);
+  return scored.map((x) => x.r).filter((r) => (seen.has(r.label) ? false : seen.add(r.label))).slice(0, 5);
 }
 
 /* ── Unknown items: size-based safe estimate ─────────────────────── */

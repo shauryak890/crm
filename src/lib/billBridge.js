@@ -12,3 +12,10 @@ export function sendToBill(lines) {
 export function drainBill() {
   return queue.splice(0, queue.length);
 }
+
+// Open Brighty with a question already asked (e.g. from an empty search on
+// the billing screen).
+export const ASK_EVENT = "wb:ask-brighty";
+export function askBrighty(text) {
+  window.dispatchEvent(new CustomEvent(ASK_EVENT, { detail: String(text || "") }));
+}

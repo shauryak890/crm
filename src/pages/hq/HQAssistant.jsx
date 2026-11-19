@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { BarChart3 } from "lucide-react";
 import { Sparkles, Inbox, BookOpen, Check, X, Plus, Search, Save, Clock3, MessageCircleQuestion, ShoppingCart, Camera, Brain, Trash2, ShieldCheck, Upload } from "lucide-react";
 import { loadVision, fileToImage, analyzePhoto, thumbnail, encodeEmbedding } from "../../lib/assistant/vision";
 import { C, inr, fmtDateTime } from "../../theme";
@@ -25,6 +26,7 @@ export default function HQAssistant({ toast, profile }) {
   const [photos, setPhotos] = useState([]);
   const [learning, setLearning] = useState([]);
   const [v2Missing, setV2Missing] = useState(false);   // assistant_v2.sql not run yet
+  const [log, setLog] = useState(null);                // assistant_log rows, null = not run yet
 
   const load = useCallback(async () => {
     try {
@@ -39,6 +41,7 @@ export default function HQAssistant({ toast, profile }) {
     } catch (e) {
       if (/assistant_photos|assistant_learning|schema cache|does not exist/i.test(e.message)) setV2Missing(true);
     }
+    try { setLog(await api.fetchAssistantLog(30)); } catch { setLog(null); }
     setLoading(false);
   }, [toast]);
   useEffect(() => {
@@ -88,6 +91,7 @@ export default function HQAssistant({ toast, profile }) {
           <button className="wb-hq-ai-tab" data-active={tab === "knowledge"} onClick={() => setTab("knowledge")}><BookOpen size={15} /> Price list &amp; rules</button>
           <button className="wb-hq-ai-tab" data-active={tab === "photos"} onClick={() => setTab("photos")}><Camera size={15} /> Photos</button>
           <button className="wb-hq-ai-tab" data-active={tab === "learned"} onClick={() => setTab("learned")}><Brain size={15} /> Learned</button>
+          <button className="wb-hq-ai-tab" data-active={tab === "usage"} onClick={() => setTab("usage")}><BarChart3 size={15} /> Usage</button>
         </div>
       </div>
 
@@ -109,6 +113,8 @@ export default function HQAssistant({ toast, profile }) {
           ? <Questions questions={questions} knowledge={knowledge} outletName={outletName} profile={profile} toast={toast} onChanged={load} />
           : tab === "photos"
             ? <Photos knowledge={knowledge} photos={photos} disabled={v2Missing} profile={profile} toast={toast} onChanged={load} />
+            : tab === "usage"
+              ? <Usage log={log} outletName={outletName} />
             : tab === "learned"
               ? <Learned learning={learning} knowledge={knowledge} questions={questions} toast={toast} onChanged={load} />
               : <Knowledge rows={knowledge} toast={toast} onChanged={load} profile={profile} />}
@@ -605,5 +611,74 @@ function AddItem({ onClose, toast, onChanged, profile }) {
         <div className="flex justify-end gap-2"><Btn variant="outline" onClick={onClose}>Cancel</Btn><Btn icon={Plus} onClick={save}>Add</Btn></div>
       </div>
     </Modal>
+  );
+}
+
+/* ── Usage: what the outlets ask, and what Brighty missed ────────── */
+
+const RESULT_LABEL = { answer: "Price answered", "answer-catalogue": "Answered from counter catalogue", clarify: "Asked a quick question", "clarify-quote": "Asked a quick question",
+  policy: "Rule / how-to answered", list: "Rate list shown", stats: "Today's numbers", order: "Order looked up", customer: "Customer looked up", customers: "Customer looked up",
+  outlet: "Outlet details", unknown: "Couldn't answer", greet: "Greeting", thanks: "Thanks" };
+
+function Usage({ log, outletName }) {
+  if (log == null) {
+    return (
+      <Card>
+        <p style={{ fontSize: 13.5, color: C.navy, fontWeight: 700 }}>One more database update needed</p>
+        <p style={{ fontSize: 13, color: C.textMute, marginTop: 4 }}>Run <code style={{ background: C.bg, padding: "1px 6px", borderRadius: 6 }}>supabase/assistant_v3.sql</code> to start keeping a log of the questions staff ask Brighty.</p>
+      </Card>
+    );
+  }
+  const real = log.filter((r) => r.result !== "greet" && r.result !== "thanks");
+  const missed = real.filter((r) => r.result === "unknown");
+  const answered = real.length - missed.length;
+  const rate = real.length ? Math.round((answered / real.length) * 100) : 0;
+  const count = (rows, key) => {
+    const m = new Map();
+    rows.forEach((r) => { const k = key(r); if (k) m.set(k, (m.get(k) || 0) + 1); });
+    return [...m].sort((a, b) => b[1] - a[1]);
+  };
+  const byOutlet = count(real, (r) => outletName(r.outlet_id));
+  const byType = count(real, (r) => RESULT_LABEL[r.result] || r.result);
+  const topAsked = count(real.filter((r) => r.matched), (r) => r.matched).slice(0, 10);
+  const topMissed = count(missed, (r) => (r.missed_words || r.question || "").toLowerCase().trim()).slice(0, 15);
+  const max = (rows) => Math.max(1, ...rows.map((x) => x[1]));
+  const Bars = ({ rows, tone = C.teal }) => (
+    <div className="flex flex-col" style={{ gap: 7, marginTop: 10 }}>
+      {rows.map(([k, n]) => (
+        <div key={k} style={{ fontSize: 13 }}>
+          <div className="flex justify-between" style={{ gap: 8 }}><span style={{ color: C.text }}>{k}</span><b style={{ color: C.navy }}>{n}</b></div>
+          <div style={{ height: 6, background: C.bg, borderRadius: 99, marginTop: 3 }}><div style={{ height: 6, width: `${(n / max(rows)) * 100}%`, background: tone, borderRadius: 99 }} /></div>
+        </div>
+      ))}
+      {!rows.length && <p style={{ fontSize: 13, color: C.textMute }}>Nothing yet.</p>}
+    </div>
+  );
+  return (
+    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(min(340px,100%),1fr))" }}>
+      <Card>
+        <h3 style={{ fontWeight: 700, fontSize: 15, color: C.navy }}>Last 30 days</h3>
+        <div className="flex flex-wrap" style={{ gap: 24, marginTop: 10 }}>
+          <div><p style={{ fontSize: 28, fontWeight: 800, color: C.navy }}>{real.length}</p><p style={{ fontSize: 12, color: C.textMute }}>questions asked</p></div>
+          <div><p style={{ fontSize: 28, fontWeight: 800, color: rate >= 90 ? C.green : C.amber }}>{rate}%</p><p style={{ fontSize: 12, color: C.textMute }}>answered by Brighty itself</p></div>
+          <div><p style={{ fontSize: 28, fontWeight: 800, color: missed.length ? C.red : C.green }}>{missed.length}</p><p style={{ fontSize: 12, color: C.textMute }}>couldn't answer</p></div>
+        </div>
+        <p style={{ fontSize: 12.5, color: C.textMute, fontWeight: 600, marginTop: 16 }}>By outlet</p>
+        <Bars rows={byOutlet} />
+      </Card>
+      <Card>
+        <h3 style={{ fontWeight: 700, fontSize: 15, color: C.navy }}>What Brighty couldn't answer</h3>
+        <p style={{ fontSize: 12.5, color: C.textMute, marginTop: 3 }}>Add these to the price list (or as another name for an item) and Brighty will answer them next time.</p>
+        <Bars rows={topMissed} tone={C.red} />
+      </Card>
+      <Card>
+        <h3 style={{ fontWeight: 700, fontSize: 15, color: C.navy }}>Most asked</h3>
+        <Bars rows={topAsked} />
+      </Card>
+      <Card>
+        <h3 style={{ fontWeight: 700, fontSize: 15, color: C.navy }}>Kinds of questions</h3>
+        <Bars rows={byType} tone={C.navy} />
+      </Card>
+    </div>
   );
 }

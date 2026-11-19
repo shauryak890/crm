@@ -100,6 +100,17 @@
 .wb-ai-drop { position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
   background: rgba(231,244,248,.92); border: 2px dashed #2BA9C7; color: #1E8BA3; font-weight: 700; font-size: 14px; pointer-events: none; }
 
+/* Numbers, lists, offers */
+.wb-ai-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.wb-ai-tile { background: #F2F9FB; border: 1px solid #D6E9EF; border-radius: 11px; padding: 9px 11px; }
+.wb-ai-listrow { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; text-align: left; border: none; background: transparent;
+  border-bottom: 1px solid #EFF2F5; padding: 8px 2px; font-size: 13px; color: #0F2030; cursor: pointer; }
+.wb-ai-listrow:last-child { border-bottom: none; }
+.wb-ai-listrow:hover { background: #F2F9FB; }
+.wb-ai-ratelist { margin-top: 8px; max-height: 340px; overflow-y: auto; border: 1px solid #EFF2F5; border-radius: 12px; padding: 2px 10px; background: #FAFBFC; }
+.wb-ai-ratehead { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #1E8BA3; padding: 9px 2px 3px; position: sticky; top: 0; background: #FAFBFC; }
+.wb-ai-offer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-top: 8px; padding: 8px 12px; border-radius: 11px; background: #E4F6EE; color: #17694A; font-size: 12.5px; }
+
 /* Header launcher */
 .wb-ai-launch { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 6px; border-radius: 12px; cursor: pointer; position: relative; flex-shrink: 0;
   border: 1px solid #D6E9EF; background: linear-gradient(135deg, #F2F9FB, #E7F4F8); color: #163A52; font-size: 12.5px; font-weight: 700; white-space: nowrap;

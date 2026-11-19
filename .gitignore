@@ -58,3 +58,6 @@ Desktop.ini
 
 
 .supabase/
+
+# Local demo mode (made-up data for screenshots) — never committed
+src/lib/demo/
