@@ -1,15 +1,15 @@
 import { createClient } from "@supabase/supabase-js";
+import { demoClient } from "virtual:wb-demo";
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // Demo mode (local development only): open the app with ?demo to run it on
 // made-up data, without a login. The demo files live in src/lib/demo, which
-// is never committed, so a deployed build can't enter demo mode.
-const demoMods = import.meta.env.DEV ? import.meta.glob("./demo/client.js", { eager: true }) : {};
-const demoMod = Object.values(demoMods)[0];
+// is never committed, and vite.config.js swaps in an empty module for
+// production builds, so a deployed build can't enter demo mode.
 const wantsDemo = (() => {
-  if (!demoMod || typeof window === "undefined") return false;
+  if (!demoClient || typeof window === "undefined") return false;
   try {
     if (/[?&]demo\b/.test(window.location.search)) sessionStorage.setItem("wb:demo", "1");
     return sessionStorage.getItem("wb:demo") === "1";
@@ -22,7 +22,7 @@ export const isDemo = wantsDemo;
 export const isConfigured = isDemo || Boolean(url && anonKey);
 
 export const supabase = isDemo
-  ? demoMod.demoClient
+  ? demoClient
   : isConfigured
     ? createClient(url, anonKey, {
         auth: { persistSession: true, autoRefreshToken: true },
