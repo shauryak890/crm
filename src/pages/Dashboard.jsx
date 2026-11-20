@@ -2,6 +2,8 @@ import React, { useMemo, useState } from "react";
 import {
   Wallet, TrendingUp, ShoppingBag, Users as UsersIcon, Plus, ArrowUpRight, Download, Calendar, ArrowUp, ArrowDown, ReceiptText,
 } from "lucide-react";
+import { Megaphone } from "lucide-react";
+import { needsAction as leadNeedsAction } from "../lib/leads";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, AreaChart, Area,
 } from "recharts";
@@ -88,7 +90,7 @@ function sparkData(revenue, days = 7) {
   return out;
 }
 
-export default function Dashboard({ orders, expenses = [], subscriptions = [], supplyOrders = [], go, displayName, customers = [],
+export default function Dashboard({ orders, expenses = [], subscriptions = [], supplyOrders = [], leads = [], go, displayName, customers = [],
   isSuperAdmin = false, isAdmin = false, outlets = [], dashOutletId = "", setDashOutletId, loading }) {
   // Staff land on the slim counter view (today's work); owners on the
   // money view. Either can switch, and the choice is remembered.
@@ -154,7 +156,7 @@ export default function Dashboard({ orders, expenses = [], subscriptions = [], s
         </div>
       </div>
 
-      <Attention orders={orders} customers={customers} subscriptions={subscriptions} supplyOrders={supplyOrders} isSuperAdmin={isSuperAdmin} go={go} loading={loading} />
+      <Attention orders={orders} customers={customers} subscriptions={subscriptions} supplyOrders={supplyOrders} leads={leads} isSuperAdmin={isSuperAdmin} go={go} loading={loading} />
 
       {mode === "counter" ? (
         <CounterView orders={orders} revenue={revenue} go={go} />
@@ -407,7 +409,7 @@ export default function Dashboard({ orders, expenses = [], subscriptions = [], s
 }
 
 /* ── "Needs attention" — every card opens the matching filtered list ── */
-function Attention({ orders, customers = [], subscriptions, supplyOrders, isSuperAdmin, go, loading }) {
+function Attention({ orders, customers = [], subscriptions, supplyOrders, leads = [], isSuperAdmin, go, loading }) {
   if (loading && !orders.length) {
     return <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", marginBottom: 18 }}>
       {[0, 1, 2, 3].map((i) => <Card key={i}><SkeletonBlock h={14} w="60%" /><SkeletonBlock h={22} w="40%" style={{ marginTop: 10 }} /></Card>)}
@@ -428,7 +430,10 @@ function Attention({ orders, customers = [], subscriptions, supplyOrders, isSupe
   const bdays = toWish.filter((o) => o.kind === "birthday").length;
   const annivs = toWish.length - bdays;
 
+  const leadsDue = leads.filter((l) => leadNeedsAction(l));
+  const leadsNew = leadsDue.filter((l) => l.status === "new").length;
   const cards = [
+    leadsDue.length && { icon: Megaphone, tone: C.red, title: `${leadsDue.length} lead${leadsDue.length === 1 ? "" : "s"} to call`, sub: leadsNew ? `${leadsNew} new, not called yet` : "follow-ups and pickups due", to: ["leads", { chip: leadsDue.some((l) => l.status !== "booked") ? "call" : "booked" }] },
     dueToday.length && { icon: Truck, tone: C.teal, title: `${dueToday.length} to hand over today`, sub: `${inr(sumDue(dueToday))} to collect`, to: ["delivery", { tab: "today" }] },
     overdue.length && { icon: AlertTriangle, tone: C.red, title: `${overdue.length} overdue order${overdue.length === 1 ? "" : "s"}`, sub: `oldest due ${fmtDay(overdue.reduce((m, o) => (o.due_date < m ? o.due_date : m), today))}`, to: ["delivery", { tab: "overdue" }] },
     unpaid.length && { icon: Clock, tone: C.amber, title: `${inr(sumDue(unpaid))} unpaid`, sub: `across ${unpaid.length} order${unpaid.length === 1 ? "" : "s"}`, to: ["sales", { chip: "unpaid", period: currentPeriod("all") }] },

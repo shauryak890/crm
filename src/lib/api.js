@@ -1078,3 +1078,45 @@ export async function fetchAssistantLog(days = 30) {
   return fetchAll(() => supabase.from("assistant_log").select("id, outlet_id, asker, question, result, matched, missed_words, created_at")
     .gte("created_at", since).order("created_at", { ascending: false }).order("id"));
 }
+
+/* ── Leads & pickups (supabase/leads.sql) ─────────────────────────────── */
+// Staff see their outlet's leads; HQ sees all (RLS). `leadsMissing` lets the
+// screens say "run leads.sql" instead of showing a raw schema error.
+export const leadsMissing = (e) => /leads|lead_events|schema cache|does not exist/i.test(e?.message || "");
+export async function fetchLeads() {
+  return fetchAll(() => supabase.from("leads").select("*").order("created_at", { ascending: false }).order("id"));
+}
+export async function fetchLeadEvents(leadId) {
+  const { data, error } = await supabase.from("lead_events").select("*").eq("lead_id", leadId).order("created_at", { ascending: true });
+  if (error) throw error;
+  return data;
+}
+// outletId is required for HQ (no home outlet); staff get their own by default.
+export async function createLead(lead, { by_name } = {}) {
+  const row = { ...lead };
+  if (!row.outlet_id) delete row.outlet_id;
+  const { data, error } = await supabase.from("leads").insert(row).select().single();
+  if (error) throw error;
+  await supabase.from("lead_events").insert({ lead_id: data.id, outcome: "created", note: lead.note || null, by_name: by_name || null });
+  return data;
+}
+// Save a call outcome: the timeline row first, then the lead itself.
+export async function logLeadOutcome(leadId, patch, event) {
+  const { error: e1 } = await supabase.from("lead_events").insert({ lead_id: leadId, ...event });
+  if (e1) throw e1;
+  if (patch && Object.keys(patch).length) {
+    const { data, error } = await supabase.from("leads").update(patch).eq("id", leadId).select().single();
+    if (error) throw error;
+    return data;
+  }
+  return null;
+}
+export async function updateLead(id, fields) {
+  const { data, error } = await supabase.from("leads").update(fields).eq("id", id).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function deleteLead(id) {
+  const { error } = await supabase.from("leads").delete().eq("id", id);
+  if (error) throw error;
+}

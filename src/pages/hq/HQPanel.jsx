@@ -18,7 +18,7 @@ import { localIsoDate, isDelivered, fmtDate } from "../../theme";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 /* Things across the network that need someone's attention today. */
-function AlertsPanel({ outlets, orders, supplyOrders }) {
+function AlertsPanel({ outlets, orders, supplyOrders, leads = [] }) {
   const today = localIsoDate();
   const monthAgo = localIsoDate(-30);
   const name = (id) => outlets.find((o) => o.id === id)?.name?.replace(/^Patna\s*-\s*/i, "") || "—";
@@ -32,6 +32,8 @@ function AlertsPanel({ outlets, orders, supplyOrders }) {
     if (overdue.length) alerts.push({ tone: C.red, text: `${name(out.id)}: ${overdue.length} order${overdue.length === 1 ? "" : "s"} past due date` });
     if (oldDue.length) alerts.push({ tone: C.amber, text: `${name(out.id)}: ${inr(oldDue.reduce((a, o) => a + balanceDue(o), 0))} unpaid for 30+ days (${oldDue.length} orders)` });
     if (appWaiting.length) alerts.push({ tone: C.red, text: `${name(out.id)}: ${appWaiting.length} app order${appWaiting.length === 1 ? "" : "s"} waiting for a pickup driver` });
+    const slow = leads.filter((l) => l.outlet_id === out.id && l.status === "new" && waitingMinutes(l) >= 60);
+    if (slow.length) alerts.push({ tone: C.red, text: `${name(out.id)}: ${slow.length} lead${slow.length === 1 ? "" : "s"} waiting over an hour for a first call` });
     if (!billedToday && new Date().getHours() >= 13) alerts.push({ tone: C.amber, text: `${name(out.id)}: no orders billed yet today` });
   });
   supplyOrders.filter((s) => s.status === "requested").forEach((s) => {
@@ -106,7 +108,9 @@ function OutletCompare({ rows, period, onOpen }) {
 }
 import HQOffers from "./HQOffers";
 import HQAssistant from "./HQAssistant";
-import { Tag, Sparkles } from "lucide-react";
+import HQLeads from "./HQLeads";
+import { needsAction, waitingMinutes } from "../../lib/leads";
+import { Tag, Sparkles, Megaphone } from "lucide-react";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const PIE = [C.teal, C.navy, C.tealMid, C.amber, C.green, "#8FA6B4"];
@@ -160,6 +164,7 @@ export default function HQPanel({ profile, onExit }) {
   const [profiles, setProfiles] = useState([]);
   const [orderItems, setOrderItems] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
+  const [leads, setLeads] = useState([]);
   const [period, setPeriod] = usePeriod("hq", "month");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -194,7 +199,7 @@ export default function HQPanel({ profile, onExit }) {
     setLoading(true);
     setErr("");
     try {
-      const [outl, ord, cust, exp, profs, items, supply, subs] = await Promise.all([
+      const [outl, ord, cust, exp, profs, items, supply, subs, lds] = await Promise.all([
         api.fetchOutlets(),
         api.fetchOrders(),       // super_admin → all outlets
         api.fetchCustomers(),
@@ -203,9 +208,10 @@ export default function HQPanel({ profile, onExit }) {
         api.fetchAllOrderItems(),
         api.fetchSupplyOrders().catch(() => []),
         api.fetchCustomerSubscriptions().catch(() => []),
+        api.fetchLeads().catch(() => []),
       ]);
       setOutlets(outl); setOrders(ord); setCustomers(cust);
-      setExpenses(exp); setProfiles(profs); setOrderItems(items); setSupplyOrders(supply); setSubscriptions(subs);
+      setExpenses(exp); setProfiles(profs); setOrderItems(items); setSupplyOrders(supply); setSubscriptions(subs); setLeads(lds);
     } catch (e) {
       setErr(e.message || "Could not load HQ data.");
     }
@@ -615,6 +621,19 @@ export default function HQPanel({ profile, onExit }) {
     );
   }
 
+  /* ---- Leads & pickups ---- */
+  if (view === "leads") {
+    return (
+      <Shell profile={profile} onExit={onExit} logout={logout} toast={toastMsg}
+        crumb={<button onClick={() => { setView("network"); api.fetchLeads().then(setLeads).catch(() => {}); }} className="wb-press inline-flex items-center gap-1"
+          style={{ background: "transparent", border: "none", color: C.tealMid, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          <ArrowLeft size={14} /> Network
+        </button>}>
+        <HQLeads outlets={outlets} orders={orders} customers={customers} profile={profile} toast={toast} />
+      </Shell>
+    );
+  }
+
   /* ---- Brighty: questions from outlets + price list ---- */
   if (view === "assistant") {
     return (
@@ -628,6 +647,8 @@ export default function HQPanel({ profile, onExit }) {
     );
   }
 
+  const leadsToCall = leads.filter((l) => needsAction(l)).length;
+
   /* ---- Network overview ---- */
   return (
     <Shell profile={profile} onExit={onExit} logout={logout} toast={toastMsg}>
@@ -640,6 +661,7 @@ export default function HQPanel({ profile, onExit }) {
         <div className="flex items-center gap-3 flex-wrap">
           <PeriodStepper value={period} onChange={setPeriod} dark modes={["day", "week", "month", "year", "all", "custom"]} />
           <Btn variant="ghost" icon={UsersIcon} onClick={() => setView("customers")}>App customers</Btn>
+          <Btn variant="ghost" icon={Megaphone} onClick={() => setView("leads")}>Leads{leadsToCall ? ` · ${leadsToCall}` : ""}</Btn>
           <Btn variant="ghost" icon={Tag} onClick={() => setView("offers")}>Offers</Btn>
           <Btn variant="ghost" icon={Sparkles} onClick={() => setView("assistant")}>Brighty{aiOpen ? ` · ${aiOpen}` : ""}</Btn>
           <Btn variant="primary" icon={Plus} onClick={() => { setForm(EMPTY_OUTLET); setFormErr(""); setAddOpen(true); }}>New outlet</Btn>
@@ -656,7 +678,7 @@ export default function HQPanel({ profile, onExit }) {
         <Stat icon={ShoppingBag} tone="green" label={`Orders · ${periodLabel(period)}`} value={String(totals.orders)} sub="excl. cancelled" />
       </div>
 
-      <AlertsPanel outlets={outlets} orders={orders} supplyOrders={supplyOrders} />
+      <AlertsPanel outlets={outlets} orders={orders} supplyOrders={supplyOrders} leads={leads} />
 
       <OutletCompare rows={byOutlet} period={period} onOpen={setSelected} />
 

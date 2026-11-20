@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard, ShoppingCart, ReceiptText, Truck, Users as UsersIcon, UserCog,
   BarChart3, ClipboardList, Settings as SettingsIcon, Smartphone, MapPin, Search, Bell,
-  Menu, Check, X, LogOut, Tag, Lock, Minimize2, PackagePlus, Wallet, BadgePercent, Sparkles,
+  Menu, Check, X, LogOut, Tag, Lock, Minimize2, PackagePlus, Wallet, BadgePercent, Sparkles, Megaphone,
 } from "lucide-react";
 
 import { C, DISPLAY, inr, collected, balanceDue, orderRef, localIsoDate, isDelivered, isCancelled, APP_LIFECYCLE_LABEL } from "./theme";
@@ -32,6 +32,8 @@ import DeliveryAlert from "./components/DeliveryAlert";
 import GlobalSearch from "./components/GlobalSearch";
 import HQPanel from "./pages/hq/HQPanel";
 import Assistant from "./components/Assistant";
+import Leads from "./pages/Leads";
+import { needsAction as leadNeedsAction } from "./lib/leads";
 
 const NAV = [
   { section: "Operations", items: [
@@ -40,6 +42,7 @@ const NAV = [
     { id: "sales", label: "Sales", icon: ReceiptText },
     { id: "orderstatus", label: "Order Status", icon: ClipboardList },
     { id: "delivery", label: "Delivery List", icon: Truck },
+    { id: "leads", label: "Leads & Pickups", icon: Megaphone },
   ]},
   { section: "Directory", items: [
     { id: "customers", label: "Customers", icon: UsersIcon },
@@ -123,6 +126,9 @@ export default function App() {
   const [orderItems, setOrderItems] = useState([]);
   const [outlets, setOutlets] = useState([]);
   const [supplyOrders, setSupplyOrders] = useState([]);
+  const [leads, setLeads] = useState([]);
+  const [leadsMissing, setLeadsMissing] = useState(false);
+  const [nowTick, setNowTick] = useState(() => Date.now()); // re-checks follow-ups that fall due
   const [billingOutletId, setBillingOutletId] = useState("");  // super-admin's chosen outlet for POS
   const [dashOutletId, setDashOutletId] = useState("");        // super-admin's Dashboard filter ("" = all outlets)
   const [loading, setLoading] = useState(true);
@@ -215,6 +221,32 @@ export default function App() {
   }, [session, toast]);
 
   useEffect(() => { if (session) refresh(); }, [session, refresh]);
+
+  // Leads load on their own so a missing table (leads.sql not run yet)
+  // never blocks the rest of the app.
+  const loadLeads = useCallback(async () => {
+    try { setLeads(await api.fetchLeads()); setLeadsMissing(false); }
+    catch (e) { if (api.leadsMissing(e)) setLeadsMissing(true); else console.warn("leads load failed:", e.message); }
+  }, []);
+  useEffect(() => {
+    if (!session) return;
+    loadLeads();
+    let timer = null;
+    const ch = api.subscribeTable("leads", (payload) => {
+      if (payload?.eventType === "INSERT" && payload.new?.created_by && payload.new.created_by !== session.user.id) {
+        toast(`New lead${payload.new.name ? " · " + payload.new.name : ""}: call ${payload.new.phone}`);
+      }
+      clearTimeout(timer);
+      timer = setTimeout(loadLeads, 800);
+    }, "app-shell-leads");
+    const tick = setInterval(() => setNowTick(Date.now()), 60000);
+    return () => { clearTimeout(timer); clearInterval(tick); api.unsubscribe(ch); };
+  }, [session, loadLeads, toast]);
+  const onLeadSaved = useCallback((l) => {
+    if (!l) return;
+    setLeads((p) => (p.some((x) => x.id === l.id) ? p.map((x) => (x.id === l.id ? { ...x, ...l } : x)) : [l, ...p]));
+  }, []);
+  const onLeadDeleted = useCallback((id) => setLeads((p) => p.filter((x) => x.id !== id)), []);
 
   // Keep orders live across the whole app — status changes from the
   // customer/driver apps or another counter show up in Sales, Order
@@ -511,6 +543,13 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
   const dashCustomers = dashOutletId ? customers.filter((c) => c.outlet_id === dashOutletId) : customers;
   const dashSubscriptions = dashOutletId ? subscriptions.filter((s) => s.outlet_id === dashOutletId) : subscriptions;
   const dashSupply = dashOutletId ? supplyOrders.filter((s) => s.outlet_id === dashOutletId) : supplyOrders;
+  const dashLeads = dashOutletId ? leads.filter((l) => l.outlet_id === dashOutletId) : leads;
+  // "Bill now" on a lead: open POS with the customer filled in (and, for
+  // HQ, billing set to the lead's outlet).
+  const onBillLead = (l) => {
+    if (isSuperAdmin && l.outlet_id) setBillingOutletId(l.outlet_id);
+    go("pos", { customer: { name: l.name || "", phone: String(l.phone || "").replace(/\D/g, "").slice(-10), address: l.area || "" } });
+  };
 
   // Sidebar badges — work waiting on each page, visible from anywhere.
   const today = localIsoDate();
@@ -522,6 +561,10 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
     delivery: dueToday ? { n: dueToday, tone: "teal", title: `${dueToday} due today${overdue ? ` · ${overdue} overdue` : ""}` }
       : overdue ? { n: overdue, tone: "red", title: `${overdue} overdue` } : null,
     apporders: (() => { const n = orders.filter((o) => o.channel === "app" && o.order_status === "pending_pickup").length; return n ? { n, tone: "red", title: `${n} awaiting pickup` } : null; })(),
+    leads: (() => {
+      const n = leads.filter((l) => leadNeedsAction(l, Math.max(nowTick, Date.now()))).length;
+      return n ? { n, tone: "red", title: `${n} lead${n === 1 ? "" : "s"} to call or pick up` } : null;
+    })(),
     supplies: (() => {
       const n = supplyOrders.filter((s) => (isSuperAdmin ? s.status === "requested" : s.status === "dispatched")).length;
       return n ? { n, tone: "amber", title: isSuperAdmin ? `${n} awaiting HQ approval` : `${n} on the way` } : null;
@@ -623,7 +666,7 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
           <div key={view + (navIntent?.id || "")} className="wb-enter">
           {ADMIN_VIEWS.has(view) && !isAdmin ? <AccessDenied /> : (
             <>
-          {view === "dashboard" && <Dashboard orders={dashOrders} expenses={dashExpenses} subscriptions={dashSubscriptions} supplyOrders={dashSupply} go={go} displayName={displayName} customers={dashCustomers}
+          {view === "dashboard" && <Dashboard orders={dashOrders} expenses={dashExpenses} subscriptions={dashSubscriptions} supplyOrders={dashSupply} leads={dashLeads} go={go} displayName={displayName} customers={dashCustomers}
             isSuperAdmin={isSuperAdmin} isAdmin={isAdmin} outlets={outlets} dashOutletId={dashOutletId} setDashOutletId={setDashOutletId} loading={loading} />}
           {view === "pos" && <POS products={products} customers={customers} orders={orders} onPay={onPay} profile={profile} focusMode={focusMode} setFocusMode={setFocusMode} isAdmin={isAdmin} onQuickAddProduct={onQuickAddProduct}
             isSuperAdmin={isSuperAdmin} outlets={outlets} billingOutletId={billingOutletId} setBillingOutletId={setBillingOutletId}
@@ -634,6 +677,8 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
             onStatus={onStatus} onCollectPayment={onCollectPayment} onResetPayment={onResetPayment} onOpenInvoice={setInvoiceOrder}
             onEditOrder={onEditOrder} onQuickAddProduct={onQuickAddProduct}
             onChangeDeliveryDate={onChangeDeliveryDate} onMarkDelayNotified={onMarkDelayNotified} />}
+          {view === "leads" && <Leads leads={leads} leadsMissing={leadsMissing} orders={orders} customers={customers} outlets={outlets} isSuperAdmin={isSuperAdmin}
+            byName={displayName} toast={toast} onSaved={onLeadSaved} onDeleted={onLeadDeleted} onBill={onBillLead} intent={navIntent} />}
           {view === "orderstatus" && <OrderStatus orders={orders} onStatus={onStatus} onOpenInvoice={setInvoiceOrder} />}
           {view === "delivery" && <Delivery orders={orders} onStatus={onStatus} onCollectPayment={onCollectPayment} onResetPayment={onResetPayment}
             isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} outlets={outlets} intent={navIntent} onOpenInvoice={setInvoiceOrder} />}
@@ -677,7 +722,7 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
 
       {/* Hidden on the counter screens, where its corner sits on top of
           the Pay / Send buttons. */}
-      {view !== "pos" && view !== "supplies" && view !== "delivery" && !assistantOpen && (
+      {view !== "pos" && view !== "supplies" && view !== "delivery" && view !== "leads" && !assistantOpen && (
         <DeliveryAlert orders={orders} onJump={() => go("delivery")} />
       )}
 
