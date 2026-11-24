@@ -33,7 +33,7 @@ import GlobalSearch from "./components/GlobalSearch";
 import HQPanel from "./pages/hq/HQPanel";
 import Assistant from "./components/Assistant";
 import Leads from "./pages/Leads";
-import { needsAction as leadNeedsAction } from "./lib/leads";
+import { needsAction as leadNeedsAction, missedAppPickup, leadFromAppOrder } from "./lib/leads";
 
 const NAV = [
   { section: "Operations", items: [
@@ -128,6 +128,8 @@ export default function App() {
   const [supplyOrders, setSupplyOrders] = useState([]);
   const [leads, setLeads] = useState([]);
   const [leadsMissing, setLeadsMissing] = useState(false);
+  const [leadsReady, setLeadsReady] = useState(false);     // first load finished
+  const autoLeadTried = useRef(new Set());                  // app orders already turned into leads this session
   const [nowTick, setNowTick] = useState(() => Date.now()); // re-checks follow-ups that fall due
   const [billingOutletId, setBillingOutletId] = useState("");  // super-admin's chosen outlet for POS
   const [dashOutletId, setDashOutletId] = useState("");        // super-admin's Dashboard filter ("" = all outlets)
@@ -225,7 +227,7 @@ export default function App() {
   // Leads load on their own so a missing table (leads.sql not run yet)
   // never blocks the rest of the app.
   const loadLeads = useCallback(async () => {
-    try { setLeads(await api.fetchLeads()); setLeadsMissing(false); }
+    try { setLeads(await api.fetchLeads()); setLeadsMissing(false); setLeadsReady(true); }
     catch (e) { if (api.leadsMissing(e)) setLeadsMissing(true); else console.warn("leads load failed:", e.message); }
   }, []);
   useEffect(() => {
@@ -247,6 +249,28 @@ export default function App() {
     setLeads((p) => (p.some((x) => x.id === l.id) ? p.map((x) => (x.id === l.id ? { ...x, ...l } : x)) : [l, ...p]));
   }, []);
   const onLeadDeleted = useCallback((id) => setLeads((p) => p.filter((x) => x.id !== id)), []);
+
+  // An app order whose pickup window passed without a pickup becomes a lead
+  // to call (once — the database allows one lead per app order). Runs only
+  // after leads have loaded, so it never duplicates an existing lead.
+  useEffect(() => {
+    if (!session || !leadsReady || leadsMissing || loading) return;
+    const have = new Set(leads.map((l) => l.app_order_id).filter(Boolean));
+    const due = orders.filter((o) => missedAppPickup(o, nowTick) && !have.has(o.id) && !autoLeadTried.current.has(o.id));
+    if (!due.length) return;
+    due.forEach((o) => autoLeadTried.current.add(o.id));
+    (async () => {
+      let made = 0;
+      for (const o of due) {
+        try { onLeadSaved(await api.createLead(leadFromAppOrder(o, orderRef(o)), { by_name: "Auto · missed app pickup" })); made++; }
+        catch (e) {
+          if (/app_order_id/i.test(e.message)) { console.warn("Missed-pickup leads need supabase/app_order_followup.sql"); break; }
+          if (!/duplicate|unique/i.test(e.message)) console.warn("auto lead failed:", e.message);
+        }
+      }
+      if (made) toast(`${made} missed app pickup${made === 1 ? "" : "s"} added to Leads & Pickups to call`);
+    })();
+  }, [session, leadsReady, leadsMissing, loading, orders, leads, nowTick, onLeadSaved, toast]);
 
   // Keep orders live across the whole app — status changes from the
   // customer/driver apps or another counter show up in Sales, Order
@@ -678,7 +702,8 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
             onEditOrder={onEditOrder} onQuickAddProduct={onQuickAddProduct}
             onChangeDeliveryDate={onChangeDeliveryDate} onMarkDelayNotified={onMarkDelayNotified} />}
           {view === "leads" && <Leads leads={leads} leadsMissing={leadsMissing} orders={orders} customers={customers} outlets={outlets} isSuperAdmin={isSuperAdmin}
-            byName={displayName} toast={toast} onSaved={onLeadSaved} onDeleted={onLeadDeleted} onBill={onBillLead} intent={navIntent} />}
+            byName={displayName} toast={toast} onSaved={onLeadSaved} onDeleted={onLeadDeleted} onBill={onBillLead} intent={navIntent}
+            onOpenAppOrders={() => go("apporders")} onOrdersChanged={refresh} />}
           {view === "orderstatus" && <OrderStatus orders={orders} onStatus={onStatus} onOpenInvoice={setInvoiceOrder} />}
           {view === "delivery" && <Delivery orders={orders} onStatus={onStatus} onCollectPayment={onCollectPayment} onResetPayment={onResetPayment}
             isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} outlets={outlets} intent={navIntent} onOpenInvoice={setInvoiceOrder} />}
@@ -694,7 +719,7 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
           {view === "catalogue" && <Catalogue onRefresh={refresh} toast={toast} isSuperAdmin={isSuperAdmin} outlets={outlets} />}
           {view === "users" && <Users profiles={profiles} loading={loading} onRefresh={refresh} toast={toast} outlets={outlets} isSuperAdmin={isSuperAdmin} currentOutletId={profile?.outlet_id} />}
           {view === "settings" && <Settings profile={profile} session={session} toast={toast} onRefresh={refresh} />}
-          {view === "apporders" && <AppOrders toast={toast} />}
+          {view === "apporders" && <AppOrders toast={toast} byName={displayName} onChanged={() => { loadLeads(); refresh(); }} onLeadsChanged={loadLeads} />}
           {view === "tracking" && <LiveTracking toast={toast} />}
             </>
           )}

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Smartphone, Bike, MapPin, Phone, RefreshCw, UserPlus, Clock } from "lucide-react";
+import { Smartphone, Bike, MapPin, Phone, RefreshCw, UserPlus, Clock, XCircle, AlertTriangle } from "lucide-react";
+import { missedAppPickup, appOrderOpen } from "../lib/leads";
 import { C, DISPLAY, inr, orderRef } from "../theme";
 import { Card, PageHead, Badge, Btn, IconCircle, Modal, field, fieldLabel } from "../components/ui";
 import * as api from "../lib/api";
@@ -38,13 +39,14 @@ function timeAgo(ts) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-export default function AppOrders({ toast }) {
+export default function AppOrders({ toast, byName, onChanged, onLeadsChanged }) {
   const [orders, setOrders] = useState([]);
   const [drivers, setDrivers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [assignFor, setAssignFor] = useState(null); // { order, type } being assigned
   const [weighFor, setWeighFor] = useState(null);   // order being weighed at outlet
+  const [cancelFor, setCancelFor] = useState(null); // order being cancelled by the outlet
   const [live, setLive] = useState(false);
 
   const load = useCallback(async () => {
@@ -105,9 +107,11 @@ export default function AppOrders({ toast }) {
       } else {
         await api.updateOrderStatus(id, status);
       }
+      // A picked-up order closes its missed-pickup lead (database trigger).
+      onLeadsChanged && onLeadsChanged();
     }
     catch (e) { toast && toast("Update failed: " + e.message); load(); }
-  }, [toast, load, orders]);
+  }, [toast, load, orders, onLeadsChanged]);
 
   const pending = orders.filter((o) => o.order_status === "pending_pickup");
   // Customer-cancelled orders are finished, not "in progress".
@@ -149,7 +153,8 @@ export default function AppOrders({ toast }) {
       ) : (
         <div className="flex flex-col gap-3">
           {orders.map((o) => (
-            <OrderRow key={o.id} o={o} assignedTypes={openTaskTypes(o.id)} onAssign={(type) => setAssignFor({ order: o, type })} onStatus={onStatus} />
+            <OrderRow key={o.id} o={o} assignedTypes={openTaskTypes(o.id)} onAssign={(type) => setAssignFor({ order: o, type })} onStatus={onStatus}
+              onCancel={() => setCancelFor(o)} />
           ))}
         </div>
       )}
@@ -162,6 +167,16 @@ export default function AppOrders({ toast }) {
           onClose={() => setAssignFor(null)}
           onAssigned={async () => { setAssignFor(null); await load(); }}
           onNeedDriver={load}
+          toast={toast}
+        />
+      )}
+
+      {cancelFor && (
+        <CancelModal
+          order={cancelFor}
+          byName={byName}
+          onClose={() => setCancelFor(null)}
+          onCancelled={async () => { setCancelFor(null); await load(); onChanged && onChanged(); }}
           toast={toast}
         />
       )}
@@ -343,7 +358,9 @@ function Stat({ label, value, tone, icon }) {
 // and the final delivered mark are the outlet's to advance.)
 const APP_STAGES = ["picked_up", "at_outlet", "washing", "ready", "out_for_delivery", "delivered"];
 
-function OrderRow({ o, assignedTypes, onAssign, onStatus }) {
+function OrderRow({ o, assignedTypes, onAssign, onStatus, onCancel }) {
+  const missed = missedAppPickup(o);
+  const byOutlet = o.order_status === "cancelled" && !!o.cancel_reason;
   const has = assignedTypes ?? new Set();
   // Only assignable if the right status AND no open task of that type yet
   // (prevents re-assigning + flooding the driver with duplicates).
@@ -365,6 +382,7 @@ function OrderRow({ o, assignedTypes, onAssign, onStatus }) {
             <div className="flex items-center gap-2">
               <span style={{ fontWeight: 700, color: C.navy, fontSize: 14.5 }}>#{orderRef(o)}</span>
               <Badge tone={STATE_TONE[o.order_status] || "muted"}>{STATE_LABEL[o.order_status] || o.order_status}</Badge>
+              {missed && <Badge tone="danger"><AlertTriangle size={11} /> Pickup missed</Badge>}
             </div>
             <p style={{ fontSize: 13, color: C.text, fontWeight: 600, marginTop: 3 }}>{o.customer_name}</p>
             <p style={{ fontSize: 12, color: C.textFaint, marginTop: 1 }}>{timeAgo(o.created_at)}</p>
@@ -381,7 +399,7 @@ function OrderRow({ o, assignedTypes, onAssign, onStatus }) {
           <span style={{ fontFamily: DISPLAY, fontWeight: 800, color: C.navy, fontSize: 16 }}>{inr(o.total)}</span>
           {terminal && (
             <Badge tone={o.order_status === "cancelled" ? "danger" : "success"}>
-              {o.order_status === "cancelled" ? "Cancelled by customer" : "Delivered"}
+              {o.order_status === "cancelled" ? (byOutlet ? `Cancelled by outlet · ${o.cancel_reason}` : "Cancelled by customer") : "Delivered"}
             </Badge>
           )}
           {showStatus && (
@@ -399,6 +417,7 @@ function OrderRow({ o, assignedTypes, onAssign, onStatus }) {
             : has.has("pickup") && o.order_status === "pending_pickup"
             ? <Badge tone="info">Pickup assigned</Badge>
             : null)}
+          {appOrderOpen(o) && onCancel && <Btn small variant="danger" icon={XCircle} onClick={onCancel}>Cancel order</Btn>}
         </div>
       </div>
     </Card>
@@ -486,6 +505,57 @@ function AssignModal({ order, type = "pickup", drivers, onClose, onAssigned, onN
           </div>
         </>
       )}
+    </Modal>
+  );
+}
+
+// The outlet cancels an order that hasn't been picked up (e.g. the customer
+// can't be reached). Done on the server: coins are refunded, the driver's
+// pickup task closes and the customer gets the cancellation message.
+const CANCEL_REASONS = [
+  "Customer not reachable",
+  "Customer asked to cancel",
+  "Outside our pickup area",
+  "Duplicate order",
+];
+function CancelModal({ order, byName, onClose, onCancelled, toast }) {
+  const [reason, setReason] = useState(CANCEL_REASONS[0]);
+  const [other, setOther] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const submit = async () => {
+    const base = reason === "other" ? other.trim() : reason;
+    if (!base) return setErr("Write the reason.");
+    const full = note.trim() ? `${base} (${note.trim()})` : base;
+    setSaving(true); setErr("");
+    try {
+      const res = await api.staffCancelAppOrder(order.id, full, byName);
+      toast && toast(`#${orderRef(order)} cancelled${res.coins_refunded ? " · coins refunded" : ""}. The customer has been notified.`);
+      await onCancelled();
+    } catch (e) { setErr(e.message); setSaving(false); }
+  };
+  return (
+    <Modal title={`Cancel #${orderRef(order)}?`} sub={`${order.customer_name || "Customer"} · ${inr(order.total)}${order.due_date ? ` · pickup ${order.due_date}${order.pickup_slot ? " " + order.pickup_slot : ""}` : ""}`} onClose={onClose} width={480}>
+      <p style={{ fontSize: 13, color: C.textMute, lineHeight: 1.5, marginBottom: 14 }}>
+        The order is kept (marked cancelled, not deleted). The customer gets the usual “order cancelled” message, any coins they used are refunded, and the driver's pickup is called off.
+      </p>
+      <label style={fieldLabel}>Why?</label>
+      <div className="flex flex-col gap-2" style={{ marginBottom: 12 }}>
+        {[...CANCEL_REASONS, "other"].map((r) => (
+          <label key={r} className="flex items-center gap-2" style={{ fontSize: 13.5, color: C.text, cursor: "pointer" }}>
+            <input type="radio" name="cancel-reason" checked={reason === r} onChange={() => setReason(r)} /> {r === "other" ? "Something else" : r}
+          </label>
+        ))}
+        {reason === "other" && <input value={other} onChange={(e) => setOther(e.target.value)} placeholder="Reason" style={field} autoFocus />}
+      </div>
+      <label style={fieldLabel}>Note (optional)</label>
+      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. called 3 times on 17–18 Nov, WhatsApp not read" style={{ ...field, marginBottom: 12 }} />
+      {err && <p style={{ color: C.red, fontSize: 12.5, marginBottom: 10 }}>{err}</p>}
+      <div className="flex justify-end gap-2">
+        <Btn variant="outline" onClick={onClose}>Keep order</Btn>
+        <Btn variant="danger" icon={XCircle} onClick={submit} disabled={saving}>{saving ? "Cancelling…" : "Cancel order"}</Btn>
+      </div>
     </Modal>
   );
 }

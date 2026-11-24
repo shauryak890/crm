@@ -32,6 +32,8 @@ function AlertsPanel({ outlets, orders, supplyOrders, leads = [] }) {
     if (overdue.length) alerts.push({ tone: C.red, text: `${name(out.id)}: ${overdue.length} order${overdue.length === 1 ? "" : "s"} past due date` });
     if (oldDue.length) alerts.push({ tone: C.amber, text: `${name(out.id)}: ${inr(oldDue.reduce((a, o) => a + balanceDue(o), 0))} unpaid for 30+ days (${oldDue.length} orders)` });
     if (appWaiting.length) alerts.push({ tone: C.red, text: `${name(out.id)}: ${appWaiting.length} app order${appWaiting.length === 1 ? "" : "s"} waiting for a pickup driver` });
+    const missed = mine.filter((o) => missedAppPickup(o));
+    if (missed.length) alerts.push({ tone: C.red, text: `${name(out.id)}: ${missed.length} app order${missed.length === 1 ? "" : "s"} with a missed pickup (call the customer, or cancel)` });
     const slow = leads.filter((l) => l.outlet_id === out.id && l.status === "new" && waitingMinutes(l) >= 60);
     if (slow.length) alerts.push({ tone: C.red, text: `${name(out.id)}: ${slow.length} lead${slow.length === 1 ? "" : "s"} waiting over an hour for a first call` });
     if (!billedToday && new Date().getHours() >= 13) alerts.push({ tone: C.amber, text: `${name(out.id)}: no orders billed yet today` });
@@ -109,7 +111,7 @@ function OutletCompare({ rows, period, onOpen }) {
 import HQOffers from "./HQOffers";
 import HQAssistant from "./HQAssistant";
 import HQLeads from "./HQLeads";
-import { needsAction, waitingMinutes } from "../../lib/leads";
+import { needsAction, waitingMinutes, missedAppPickup } from "../../lib/leads";
 import { Tag, Sparkles, Megaphone } from "lucide-react";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];

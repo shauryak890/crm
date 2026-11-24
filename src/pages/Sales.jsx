@@ -212,7 +212,7 @@ export default function Sales({
 export function StatusSelect({ o, onStatus, full }) {
   // A customer-cancelled order is terminal — the CRM must not be able to
   // revive it. Show a static badge, no dropdown.
-  if (isCancelled(o)) return <Badge tone="danger">Cancelled{o.channel === "app" ? " by customer" : ""}</Badge>;
+  if (isCancelled(o)) return <Badge tone="danger">Cancelled{o.channel === "app" ? (o.cancel_reason ? ` by outlet · ${o.cancel_reason}` : " by customer") : ""}</Badge>;
   // App orders use the lowercase lifecycle vocabulary; walk-ins use the
   // KANBAN labels. Pick the right option set per channel.
   const isApp = o.channel === "app" || APP_LIFECYCLE.includes(o.order_status);

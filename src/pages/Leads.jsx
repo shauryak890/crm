@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Phone, MessageCircle, PhoneCall, Plus, ShoppingCart, Search, Clock, CheckCircle2, XCircle,
-  CalendarClock, Truck, StickyNote, RotateCcw, Trash2, AlertTriangle, UserCheck, Pencil, Megaphone,
+  CalendarClock, Truck, StickyNote, RotateCcw, Trash2, AlertTriangle, UserCheck, Pencil, Megaphone, PhoneOff,
 } from "lucide-react";
 import { C, fmtDateTime, fmtDay, orderRef, waLink, inr } from "../theme";
 import * as api from "../lib/api";
@@ -9,14 +9,23 @@ import { Card, Btn, Badge, Modal, PageHead, field, fieldLabel } from "../compone
 import { FilterChips, Drawer, KV } from "../components/kit";
 import {
   KINDS, SOURCES, OUTCOMES, kindLabel, sourceLabel, outcomeLabel, leadPhone, validLeadPhone, bucket, needsAction,
-  waitingMinutes, retryChoices, applyOutcome, reopen, matchingOrder, openDuplicate, ago, toLocalInput, fromLocalInput, leadIsOpen,
+  waitingMinutes, retryChoices, applyOutcome, reopen, matchingOrder, openDuplicate, ago, toLocalInput, fromLocalInput, leadIsOpen, appOrderOpen,
 } from "../lib/leads";
+
+// Why an app order is being cancelled, by the call outcome that closed its lead.
+const CANCEL_REASON = {
+  unreachable: "Customer not reachable",
+  wrong_number: "Wrong / invalid number",
+  not_interested: "Customer doesn't want the pickup",
+  enquiry: "Customer doesn't want the pickup",
+};
+const APP_STATE = { pending_pickup: "waiting for pickup", pickup_assigned: "driver assigned", cancelled: "cancelled", delivered: "delivered" };
 
 const outletShort = (outlets, id) => (outlets.find((o) => o.id === id)?.name || "—").replace(/^Patna\s*-\s*/i, "");
 const fmtPhone = (p) => { const d = leadPhone(p); return d.length === 10 ? `${d.slice(0, 5)} ${d.slice(5)}` : p; };
 
 /* ── Store page ─────────────────────────────────────────────────────── */
-export default function Leads({ leads, leadsMissing, orders, customers, outlets, isSuperAdmin, byName, toast, onSaved, onDeleted, onBill, intent }) {
+export default function Leads({ leads, leadsMissing, orders, customers, outlets, isSuperAdmin, byName, toast, onSaved, onDeleted, onBill, intent, onOpenAppOrders, onOrdersChanged }) {
   const [adding, setAdding] = useState(false);
   return (
     <div>
@@ -26,7 +35,7 @@ export default function Leads({ leads, leadsMissing, orders, customers, outlets,
       {leadsMissing ? <SetupNotice /> : (
         <LeadBoard leads={leads} orders={orders} customers={customers} outlets={outlets} multiOutlet={isSuperAdmin}
           canDelete={isSuperAdmin} byName={byName} toast={toast} onSaved={onSaved} onDeleted={onDeleted} onBill={onBill}
-          initialChip={intent?.chip} />
+          initialChip={intent?.chip} onOpenAppOrders={onOpenAppOrders} onOrdersChanged={onOrdersChanged} />
       )}
       {adding && <AddLeadModal leads={leads} customers={customers} outlets={outlets} needOutlet={isSuperAdmin} byName={byName}
         onClose={() => setAdding(false)} toast={toast} onCreated={(l) => { onSaved(l); setAdding(false); }} onSaved={onSaved} />}
@@ -51,7 +60,7 @@ export function SetupNotice({ dark }) {
 }
 
 /* ── The list, shared by the store page and HQ ──────────────────────── */
-export function LeadBoard({ leads, orders = [], customers = [], outlets = [], multiOutlet, canDelete, byName, toast, onSaved, onDeleted, onBill, initialChip }) {
+export function LeadBoard({ leads, orders = [], customers = [], outlets = [], multiOutlet, canDelete, byName, toast, onSaved, onDeleted, onBill, initialChip, onOpenAppOrders, onOrdersChanged }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(t); }, []);
   // Re-read the clock whenever a lead changes, so one that was just set to
@@ -122,13 +131,13 @@ export function LeadBoard({ leads, orders = [], customers = [], outlets = [], mu
         <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(360px, 100%), 1fr))" }}>
           {shown.map((l) => (
             <LeadCard key={l.id} lead={l} now={now} orders={orders} customers={customers} outlets={outlets} multiOutlet={multiOutlet}
-              onLog={() => setLogging(l.id)} onOpen={() => setOpenId(l.id)} onBill={onBill} byName={byName} toast={toast} onSaved={onSaved} />
+              onLog={() => setLogging(l.id)} onOpen={() => setOpenId(l.id)} onBill={onBill} byName={byName} toast={toast} onSaved={onSaved} onOpenAppOrders={onOpenAppOrders} />
           ))}
         </div>
       )}
 
       {logLead && <LogCallModal lead={logLead} byName={byName} orders={orders} toast={toast} onClose={() => setLogging(null)}
-        onSaved={(l) => { onSaved(l); setLogging(null); }} onBill={onBill} />}
+        onSaved={(l) => { onSaved(l); setLogging(null); }} onBill={onBill} onOrdersChanged={onOrdersChanged} />}
       {openLead && <LeadDrawer lead={openLead} orders={orders} outlets={outlets} canDelete={canDelete} byName={byName} toast={toast}
         onClose={() => setOpenId(null)} onSaved={onSaved} onDeleted={(id) => { setOpenId(null); onDeleted(id); }} onLog={() => setLogging(openLead.id)} />}
     </div>
@@ -154,8 +163,9 @@ function statusLine(l, now) {
   return { tone: C.textMute, icon: XCircle, text: `Closed · ${l.lost_reason || outcomeLabel(l.last_outcome)}` };
 }
 
-function LeadCard({ lead: l, now, orders, customers, outlets, multiOutlet, onLog, onOpen, onBill, byName, toast, onSaved }) {
+function LeadCard({ lead: l, now, orders, customers, outlets, multiOutlet, onLog, onOpen, onBill, byName, toast, onSaved, onOpenAppOrders }) {
   const st = statusLine(l, now);
+  const appOrder = l.app_order_id ? orders.find((o) => o.id === l.app_order_id) : null;
   const ph = leadPhone(l.phone);
   const wa = waLink(ph, `Namaste${l.name ? " " + l.name.split(" ")[0] : ""}, this is Whites & Brights. `);
   const match = l.status !== "won" && l.status !== "lost" ? matchingOrder(l, orders) : null;
@@ -181,6 +191,12 @@ function LeadCard({ lead: l, now, orders, customers, outlets, multiOutlet, onLog
         </div>
       </div>
       <p className="inline-flex items-center gap-2" style={{ fontSize: 12.5, fontWeight: 600, color: st.tone }}><st.icon size={14} /> {st.text}</p>
+      {appOrder && (
+        <div className="flex items-center justify-between gap-2 flex-wrap" style={{ background: C.tealLight, borderRadius: 8, padding: "6px 10px", fontSize: 12.5, color: C.navy }}>
+          <span><b>App order #{orderRef(appOrder)}</b> · {inr(appOrder.total)} · {APP_STATE[appOrder.order_status] || appOrder.order_status}{appOrder.due_date ? ` · pickup ${fmtDay(appOrder.due_date)}${appOrder.pickup_slot ? " " + appOrder.pickup_slot : ""}` : ""}</span>
+          {onOpenAppOrders && <button onClick={onOpenAppOrders} style={{ background: "none", border: "none", color: C.tealDark, fontWeight: 700, cursor: "pointer", fontSize: 12.5, padding: 0 }}>App Orders →</button>}
+        </div>
+      )}
       {(l.note || l.last_note) && (
         <div style={{ fontSize: 12.5, color: C.text, background: C.paper, borderRadius: 8, padding: "7px 10px", lineHeight: 1.45 }}>
           {l.note && <p><span style={{ color: C.textFaint }}>Note:</span> {l.note}</p>}
@@ -201,7 +217,7 @@ function LeadCard({ lead: l, now, orders, customers, outlets, multiOutlet, onLog
         {leadIsOpen(l) && <Btn small icon={PhoneCall} onClick={onLog}>Log call</Btn>}
         <a href={`tel:${ph}`} className="wb-press inline-flex items-center gap-1" style={{ textDecoration: "none", border: `1px solid ${C.border}`, borderRadius: 12, padding: "7px 12px", fontSize: 12.5, fontWeight: 600, color: C.navy }}><Phone size={14} /> Call</a>
         {wa && <a href={wa} target="_blank" rel="noreferrer" className="wb-press inline-flex items-center gap-1" style={{ textDecoration: "none", border: `1px solid ${C.border}`, borderRadius: 12, padding: "7px 12px", fontSize: 12.5, fontWeight: 600, color: C.green }}><MessageCircle size={14} /> WhatsApp</a>}
-        {onBill && leadIsOpen(l) && <Btn small variant="outline" icon={ShoppingCart} onClick={() => onBill(l)}>Bill now</Btn>}
+        {onBill && leadIsOpen(l) && !l.app_order_id && <Btn small variant="outline" icon={ShoppingCart} onClick={() => onBill(l)}>Bill now</Btn>}
         {!leadIsOpen(l) && <Btn small variant="ghost" onClick={onOpen}>Details</Btn>}
       </div>
     </div>
@@ -209,10 +225,10 @@ function LeadCard({ lead: l, now, orders, customers, outlets, multiOutlet, onLog
 }
 
 /* ── "What happened on the call?" ───────────────────────────────────── */
-const OUTCOME_ICON = { not_answering: PhoneCall, call_back: CalendarClock, booked: Truck, won: CheckCircle2, enquiry: MessageCircle, not_interested: XCircle, wrong_number: AlertTriangle, note: StickyNote };
-const OUTCOME_TONE = { not_answering: C.amber, call_back: C.tealDark, booked: C.green, won: C.green, enquiry: C.textMute, not_interested: C.red, wrong_number: C.red, note: C.navy };
+const OUTCOME_ICON = { not_answering: PhoneCall, call_back: CalendarClock, booked: Truck, won: CheckCircle2, enquiry: MessageCircle, not_interested: XCircle, wrong_number: AlertTriangle, unreachable: PhoneOff, note: StickyNote };
+const OUTCOME_TONE = { not_answering: C.amber, call_back: C.tealDark, booked: C.green, won: C.green, enquiry: C.textMute, not_interested: C.red, wrong_number: C.red, unreachable: C.red, note: C.navy };
 
-export function LogCallModal({ lead, byName, orders = [], toast, onClose, onSaved, onBill }) {
+export function LogCallModal({ lead, byName, orders = [], toast, onClose, onSaved, onBill, onOrdersChanged }) {
   const [outcome, setOutcome] = useState("");
   const [note, setNote] = useState("");
   const retries = useMemo(() => retryChoices(), []);
@@ -223,6 +239,9 @@ export function LogCallModal({ lead, byName, orders = [], toast, onClose, onSave
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const match = matchingOrder(lead, orders);
+  const appOrder = lead.app_order_id ? orders.find((o) => o.id === lead.app_order_id) : null;
+  const canCancelApp = appOrderOpen(appOrder) && !!CANCEL_REASON[outcome];
+  const [cancelApp, setCancelApp] = useState(true);
 
   const save = async () => {
     setErr("");
@@ -237,6 +256,16 @@ export function LogCallModal({ lead, byName, orders = [], toast, onClose, onSave
     try {
       const updated = await api.logLeadOutcome(lead.id, r.patch, r.event);
       onSaved(updated || { ...lead, ...r.patch });
+      // Close the lead first, then cancel its app order (otherwise the
+      // database would close the lead a second time with its own entry).
+      if (canCancelApp && cancelApp) {
+        try {
+          const res = await api.staffCancelAppOrder(appOrder.id, CANCEL_REASON[outcome], byName);
+          toast(`App order #${orderRef(appOrder)} cancelled${res.coins_refunded ? " · coins refunded" : ""}. The customer has been notified.`);
+          onOrdersChanged && onOrdersChanged();
+        } catch (e) { toast(`Lead closed, but order #${orderRef(appOrder)} was not cancelled: ${e.message}`, "error"); }
+        return;
+      }
       toast(outcome === "note" ? "Note added" : `${lead.name || fmtPhone(lead.phone)}: ${outcomeLabel(outcome)}`);
     } catch (e) { setErr("Could not save: " + e.message); setBusy(false); }
   };
@@ -282,6 +311,12 @@ export function LogCallModal({ lead, byName, orders = [], toast, onClose, onSave
         </p>
       )}
 
+      {canCancelApp && (
+        <label className="flex items-start gap-2" style={{ background: C.redLt, borderRadius: 10, padding: "10px 12px", marginBottom: 12, fontSize: 12.5, color: C.text, cursor: "pointer" }}>
+          <input type="checkbox" checked={cancelApp} onChange={(e) => setCancelApp(e.target.checked)} style={{ marginTop: 2 }} />
+          <span><b>Also cancel app order #{orderRef(appOrder)}</b> ({inr(appOrder.total)}). Reason: “{CANCEL_REASON[outcome]}”. The customer gets the usual cancellation message, and any coins they used are refunded.</span>
+        </label>
+      )}
       {outcome && (
         <div style={{ marginBottom: 12 }}>
           <label style={fieldLabel}>{outcome === "note" ? "Note" : "What did they say? (optional)"}</label>

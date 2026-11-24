@@ -34,6 +34,7 @@ export const OUTCOMES = {
   enquiry:        { label: "Just an enquiry",        status: "lost", reason: "Only wanted prices" },
   not_interested: { label: "Not interested",         status: "lost", reason: "Not interested" },
   wrong_number:   { label: "Wrong / invalid number", status: "lost", reason: "Wrong or invalid number" },
+  unreachable:    { label: "Can't reach them",       status: "lost", reason: "Customer not reachable" },
   note:           { label: "Add a note only" },
 };
 export const outcomeLabel = (o) => OUTCOMES[o]?.label || ({ created: "Lead added", reopened: "Reopened" }[o]) || o;
@@ -236,3 +237,47 @@ export const fromLocalInput = (s) => {
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 };
+
+/* ── App orders whose pickup was missed ───────────────────────────────── */
+
+const OPEN_APP = new Set(["pending_pickup", "pickup_assigned"]);
+export const appOrderOpen = (o) => !!o && o.channel === "app" && OPEN_APP.has(String(o.order_status || "").toLowerCase());
+
+// End of the booked pickup window (due_date + "18:00–20:00"), as a time.
+// No window → end of the pickup day. No date → null.
+export function pickupWindowEnd(o) {
+  if (!o?.due_date || !/^\d{4}-\d{2}-\d{2}/.test(o.due_date)) return null;
+  const d = new Date(`${String(o.due_date).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  const m = String(o.pickup_slot || "").match(/(\d{1,2})[:.](\d{2})\s*(?:[-–—]|to)\s*(\d{1,2})[:.](\d{2})/i);
+  if (m) d.setHours(Number(m[3]), Number(m[4]), 0, 0);
+  else d.setHours(23, 59, 0, 0);
+  return d.getTime();
+}
+
+// Hours after the pickup window before it becomes a lead to call; orders
+// with no pickup date become one 24 hours after they were placed.
+export const MISSED_GRACE_HOURS = 2;
+export function missedAppPickup(o, now = Date.now()) {
+  if (!appOrderOpen(o)) return false;
+  const end = pickupWindowEnd(o);
+  if (end != null) return now >= end + MISSED_GRACE_HOURS * HOUR;
+  const placed = t(o.created_at);
+  return !Number.isNaN(placed) && now >= placed + 24 * HOUR;
+}
+
+// The lead a missed app pickup turns into.
+export function leadFromAppOrder(o, ref) {
+  const when = o.due_date ? `${String(o.due_date).slice(0, 10)}${o.pickup_slot ? " · " + o.pickup_slot : ""}` : "not set";
+  return {
+    outlet_id: o.outlet_id,
+    phone: leadPhone(o.phone) || String(o.phone || ""),
+    name: o.customer_name || null,
+    area: o.address || null,
+    kind: "pickup",
+    source: "app",
+    app_order_id: o.id,
+    note: `App order #${ref || o.order_label || o.order_no || ""}: pickup (${when}) not done yet. Call to re-book or cancel.`,
+    created_by_name: "Auto · missed app pickup",
+  };
+}

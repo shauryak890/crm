@@ -1120,3 +1120,16 @@ export async function deleteLead(id) {
   const { error } = await supabase.from("leads").delete().eq("id", id);
   if (error) throw error;
 }
+
+/* ── App orders: staff cancel (supabase/app_order_followup.sql) ───────── */
+// Cancels an app order that hasn't been picked up; refunds redeemed coins
+// and closes the driver's task on the server. Throws with a readable message.
+export async function staffCancelAppOrder(orderId, reason, byName) {
+  const { data, error } = await supabase.rpc("staff_cancel_app_order", { p_order_id: orderId, p_reason: reason, p_by: byName || null });
+  if (error) {
+    if (/staff_cancel_app_order|schema cache|does not exist/i.test(error.message)) throw new Error("Cancelling needs a one-time database update (supabase/app_order_followup.sql).");
+    throw error;
+  }
+  if (!data?.success) throw new Error(data?.error || "Could not cancel the order.");
+  return data;
+}
