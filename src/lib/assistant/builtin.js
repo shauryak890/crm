@@ -36,7 +36,7 @@ export const BUILTIN_RULES = [
   {
     item: "Cancel or delete a bill", go: "sales",
     keywords: ["cancel order", "order cancel", "bill cancel", "cancel bill", "delete bill", "bill delete", "delete order", "order delete", "cancel kaise", "order hatana", "bill hatana"],
-    answer: "Walk-in bills can't be cancelled by staff. An outlet admin can delete a wrong bill: Sales → open the order → Delete (this can't be undone, and it's logged). If the customer just changed their mind about one item, ask the admin to Edit the bill instead.",
+    answer: "Walk-in bills can't be cancelled by staff. An outlet admin can delete a wrong bill: Sales → open the order → Delete (this can't be undone, and it's logged). If the customer just changed their mind about one item, ask the admin to Edit the bill instead. For an app order that hasn't been picked up yet, never delete it: use App Orders → Cancel order.",
   },
   {
     item: "Change the delivery date", go: "sales",
@@ -94,6 +94,41 @@ export const BUILTIN_RULES = [
     answer: "Orders from the customer app appear in App Orders. When the clothes reach the outlet, weigh them there first: the bill is recalculated from the real weight. Only then move the order to “At outlet”.",
   },
   {
+    item: "Leads & Pickups: who to call", go: "leads",
+    keywords: ["leads kya hai", "lead kya hai", "leads page", "lead kaha", "leads kahan", "what are leads", "lead list kaha", "pickup request", "whatsapp lead", "leads ka page", "call list kaha", "leads kaise dekhe"],
+    answer: "Leads & Pickups (left menu, under Operations) lists everyone to call back: pickup requests and price enquiries from WhatsApp, calls and HQ. To call now = new leads and call-backs that are due. Call later = a time is set. Pickups booked = pickup time agreed. The red number = people to call now + pickups due today. Call every new lead within 1 hour and log every call.",
+  },
+  {
+    item: "Log what happened on a call", go: "leads",
+    keywords: ["log call", "call log", "call ke baad", "call update", "lead update", "lead ka status", "kya hua likhna", "call result", "phone nahi utha", "not answering", "call back later", "baad me call", "call ka result", "lead me likhna"],
+    answer: "Open Leads & Pickups, press Log call on the lead, pick what happened and Save:\n• Not answering: try again in 10 min / 1 hour / tomorrow 10 am\n• Call back later: pick the time\n• Pickup booked: date, time and address\n• Order placed: the bill is made\n• Just an enquiry / Not interested / Wrong number / Can't reach them: closes the lead\n• Add a note only: the lead stays where it is.",
+  },
+  {
+    item: "Add a lead", go: "leads",
+    keywords: ["add lead", "lead add", "new lead", "naya lead", "nayi lead", "lead kaise dale", "lead kaise add", "lead banaye", "lead create", "enquiry add", "enquiry note", "pickup request add"],
+    answer: "Leads & Pickups → Add lead. Enter the mobile number, what they want (pickup, price enquiry, bulk), where they came from and a short note. If the number already has an open lead, I'll show it so you can add your note there instead. Leads HQ sends you pop up on your screen by themselves.",
+  },
+  {
+    item: "A lead became an order", go: "leads",
+    keywords: ["mark won", "lead won", "lead order ban gaya", "lead se bill", "lead bill", "lead se bill kaise banaye", "lead ka bill kaise", "bill now", "lead convert", "lead se order", "lead ka bill"],
+    answer: "Press Bill now on the lead: Point of Sale opens with the customer's name, phone and address filled in. Once a bill is made from that number, the lead shows the order with a Mark won button: tap it. Or Log call → Order placed.",
+  },
+  {
+    item: "Customer not reachable", go: "leads",
+    keywords: ["customer not reachable", "customer nahi mil raha", "phone nahi utha raha", "phone nahi uthata", "customer respond nahi", "no response", "cant reach", "can't reach", "phone switch off", "phone band", "customer reply nahi", "call nahi lag raha"],
+    answer: "Call 3 times at different times of the day and send one WhatsApp message, logging each try (Log call → Not answering). If there's still no reply, Log call → Can't reach them. If it's an app order, keep “Also cancel app order” ticked: the customer is notified and the order is cancelled, not deleted.",
+  },
+  {
+    item: "Missed app pickup", go: "apporders",
+    keywords: ["pickup missed kya", "missed pickup kya", "pickup nahi hua kya kare", "pickup chhut gaya", "app order pending", "pending app order", "app order purana", "pickup miss ho gaya", "app order 8 din"],
+    answer: "An app order still not picked up 2 hours after its pickup time shows “Pickup missed” in App Orders and is added to Leads & Pickups by itself. Call the customer: if they still want it, Log call → Pickup booked and assign the driver (the lead closes once it's picked up). No answer after 3 tries: Log call → Can't reach them, which cancels the order too.",
+  },
+  {
+    item: "Cancel an app order", go: "apporders",
+    keywords: ["cancel app order", "app order cancel", "app order kaise cancel", "online order cancel", "app ka order cancel", "app order hatana", "app order delete"],
+    answer: "Only before pickup: App Orders → Cancel order on that order → choose the reason (not reachable, customer asked, outside our area, duplicate) → add a note → Cancel order. The customer gets the usual cancellation message, any coins they used are refunded and the driver's pickup is called off. Never delete an app order.",
+  },
+  {
     item: "Item missing on the billing screen", go: "pos",
     keywords: ["item nahi mil raha", "item missing", "product add", "add product", "add item", "new item", "item add kaise", "product nahi hai", "billing me nahi"],
     answer: "Ask me its price first: I'll add it to the bill for you, even if it isn't in the list. An outlet admin can also add it permanently with New item on the billing screen, or in Catalogue.",
@@ -135,7 +170,7 @@ export const BUILTIN_FACTS = [
   {
     item: "What I can do",
     keywords: ["what can you do", "kya kar sakte", "kya kya", "help", "madad", "features", "how to use you", "tum kya", "aap kya"],
-    answer: "Ask me:\n• Any price: “lehenga heavy kitna”, “3 piece suit press”\n• A quote: “120 shirt 60 pant press urgent”, “new customer 2 saree heavy”\n• A rate list: “kids ke sab rate”, “steam press rate list”\n• A rule: pickup, express, offers, plans, delivery time\n• An order or customer: a bill number, phone number or name\n• Today's numbers: “aaj ka sale”, “due today”, “unpaid orders”\n• How to do something here: “bill kaise banaye”, “payment kaise le”\nYou can also send a photo of the garment.",
+    answer: "Ask me:\n• Any price: “lehenga heavy kitna”, “3 piece suit press”\n• A quote: “120 shirt 60 pant press urgent”, “new customer 2 saree heavy”\n• A rate list: “kids ke sab rate”, “steam press rate list”\n• A rule: pickup, express, offers, plans, delivery time\n• An order or customer: a bill number, phone number or name\n• Today's numbers: “aaj ka sale”, “due today”, “unpaid orders”\n• Leads: “aaj kisko call karna hai”, “missed pickups”, “lead kaise add kare”\n• How to do something here: “bill kaise banaye”, “payment kaise le”\nYou can also send a photo of the garment.",
   },
 ];
 

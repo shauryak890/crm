@@ -6,7 +6,7 @@
 // HQ's past answers → a safe size-based estimate) so HQ is the last stop.
 import { tokenize, nameTokens, romanize, skeleton, editDistance, GRADE_WORDS, SERVICE_WORDS, AUDIENCE_WORDS } from "./language";
 import { BUILTIN_RULES, BUILTIN_FACTS, EXTRA_KEYWORDS } from "./builtin";
-import { stripOffer, wantsList, dataIntent, outletIntent, customerByName } from "./intents";
+import { stripOffer, wantsList, dataIntent, outletIntent, customerByName, leadsIntent } from "./intents";
 
 export const EXPRESS_MULTIPLIER = 1.6; // what the billing screen charges today
 
@@ -504,7 +504,7 @@ export function answer(text, ctx) {
 
   // Things that aren't prices: a bill / phone number, today's numbers, the
   // outlet's details, a customer by name.
-  const direct = lookup(raw, ctx) || dataIntent(raw, ctx) || outletIntent(raw, ctx) || customerByName(raw, ctx);
+  const direct = lookup(raw, ctx) || dataIntent(raw, ctx) || leadsIntent(raw, ctx) || outletIntent(raw, ctx) || customerByName(raw, ctx);
   if (direct) return direct;
 
   const pol = policyHits(raw, index);

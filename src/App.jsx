@@ -728,7 +728,7 @@ ${inr(balanceDue(o))} is still unpaid on this order.` : ""))) {
       </div>
 
       <Assistant open={assistantOpen} onClose={() => setAssistantOpen(false)} profile={profile}
-        products={products} orders={orders} orderItems={orderItems} outlets={outlets}
+        products={products} orders={orders} orderItems={orderItems} outlets={outlets} leads={leads}
         isSuperAdmin={isSuperAdmin} billingOutletId={billingOutletId} go={go} toast={toast}
         onUnreadChange={setAssistantUnread} />
 

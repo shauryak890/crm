@@ -29,7 +29,7 @@ const EXAMPLES = [
   "bill kaise banaye?",
 ];
 const PAGE_LABEL = { pos: "Point of Sale", sales: "Sales", delivery: "Delivery List", orderstatus: "Order Status", customers: "Customers", subscriptions: "Subscriptions",
-  expenses: "Expenses", supplies: "Reorder Stock", apporders: "App Orders", settings: "Settings", dashboard: "Dashboard" };
+  expenses: "Expenses", supplies: "Reorder Stock", apporders: "App Orders", settings: "Settings", dashboard: "Dashboard", leads: "Leads & Pickups" };
 const isKnowledgeId = (id) => /^[0-9a-f-]{36}$/i.test(String(id || ""));
 const HEAVY_GRADES = ["heavy", "bridal", "designer"];
 const PLAIN_GRADES = ["normal", "single", "small"];
@@ -37,7 +37,7 @@ const PLAIN_GRADES = ["normal", "single", "small"];
 let msgSeq = 0;
 const mk = (role, data) => ({ id: ++msgSeq, role, ...data });
 
-export default function Assistant({ open, onClose, profile, products = [], orders = [], orderItems = [], outlets = [],
+export default function Assistant({ open, onClose, profile, products = [], orders = [], orderItems = [], outlets = [], leads = [],
   isSuperAdmin, billingOutletId, go, toast, onUnreadChange }) {
   const [tab, setTab] = useState("chat");
   const [messages, setMessages] = useState([]);
@@ -142,6 +142,10 @@ export default function Assistant({ open, onClose, profile, products = [], order
     const oid = isSuperAdmin ? billingOutletId : null;
     return oid ? orders.filter((o) => o.outlet_id === oid) : orders;
   }, [orders, isSuperAdmin, billingOutletId]);
+  const scopedLeads = useMemo(() => {
+    const oid = isSuperAdmin ? billingOutletId : null;
+    return oid ? leads.filter((l) => l.outlet_id === oid) : leads;
+  }, [leads, isSuperAdmin, billingOutletId]);
   const learned = useMemo(() => buildLearned(learnedRows), [learnedRows]);
   const outlet = useMemo(() => {
     const oid = isSuperAdmin ? billingOutletId : profile?.outlet_id;
@@ -149,8 +153,8 @@ export default function Assistant({ open, onClose, profile, products = [], order
     return o ? { name: o.name, address: o.address, phone: o.phone } : null;
   }, [outlets, isSuperAdmin, billingOutletId, profile]);
   const allOutlets = useMemo(() => outlets.map((o) => ({ name: o.name, address: o.address, phone: o.phone })), [outlets]);
-  const ctx = useMemo(() => ({ index, fallback, learned, products: outletProducts, orderItems: datedItems, orders: scopedOrders, outlet, allOutlets }),
-    [index, fallback, learned, outletProducts, datedItems, scopedOrders, outlet, allOutlets]);
+  const ctx = useMemo(() => ({ index, fallback, learned, products: outletProducts, orderItems: datedItems, orders: scopedOrders, leads: scopedLeads, outlet, allOutlets }),
+    [index, fallback, learned, outletProducts, datedItems, scopedOrders, scopedLeads, outlet, allOutlets]);
   const outletName = useMemo(() => {
     const oid = isSuperAdmin ? billingOutletId : profile?.outlet_id;
     return outlets.find((o) => o.id === oid)?.name?.replace(/^Patna\s*-\s*/i, "") || "";
@@ -938,7 +942,7 @@ function StatsCard({ res, onOpenBill, onGo }) {
     <BotShell>
       <div className="flex items-center justify-between" style={{ gap: 8 }}>
         <p style={{ fontSize: 14.5, fontWeight: 700, color: C.navy }}>{res.title}</p>
-        {res.count != null && <span className="wb-ai-st" style={{ color: C.tealDark, background: C.tealLight }}>{res.count} order{res.count === 1 ? "" : "s"}</span>}
+        {res.count != null && <span className="wb-ai-st" style={{ color: C.tealDark, background: C.tealLight }}>{res.count} {res.unit || "order"}{res.count === 1 ? "" : "s"}</span>}
       </div>
       {res.tiles && (
         <div className="wb-ai-tiles">
@@ -960,8 +964,9 @@ function StatsCard({ res, onOpenBill, onGo }) {
               {res.orders.map((o) => (
                 <button key={o.id} className="wb-ai-listrow" onClick={() => onOpenBill(o.id)}>
                   <span style={{ minWidth: 0 }}><b>#{o.label}</b> <span style={{ color: C.textMute }}>{o.name}</span><br />
-                    <span style={{ fontSize: 11.5, color: C.textFaint }}>due {fmtDate(o.due)} · {o.status}</span></span>
-                  <span style={{ fontWeight: 700, color: o.balance > 0 ? C.red : C.green, whiteSpace: "nowrap" }}>{o.balance > 0 ? inr(o.balance) : "paid"}</span>
+                    <span style={{ fontSize: 11.5, color: o.sub ? C.red : C.textFaint }}>{o.sub || `due ${fmtDate(o.due)} · ${o.status}`}</span></span>
+                  {o.right ? <span style={{ fontWeight: 700, color: C.navy, whiteSpace: "nowrap" }}>{o.right}</span>
+                    : <span style={{ fontWeight: 700, color: o.balance > 0 ? C.red : C.green, whiteSpace: "nowrap" }}>{o.balance > 0 ? inr(o.balance) : "paid"}</span>}
                 </button>
               ))}
             </div>
@@ -969,6 +974,23 @@ function StatsCard({ res, onOpenBill, onGo }) {
           {res.count > res.orders.length && <p style={{ fontSize: 11.5, color: C.textFaint, marginTop: 5 }}>Showing {res.orders.length} of {res.count}.</p>}
         </>
       )}
+      {res.leads && (
+        <>
+          {!res.leads.length && <p style={{ fontSize: 13.5, color: C.green, fontWeight: 600, marginTop: 8 }}>Nobody to call right now. All clear.</p>}
+          {res.leads.length > 0 && (
+            <div className="wb-ai-quote" style={{ marginTop: 8 }}>
+              {res.leads.map((l) => (
+                <button key={l.id} className="wb-ai-listrow" onClick={() => onGo("leads")}>
+                  <span style={{ minWidth: 0 }}><b>{l.name}</b> <span style={{ color: C.textMute }}>{l.phone}</span><br />
+                    <span style={{ fontSize: 11.5, color: l.urgent ? C.red : C.green }}>{l.line}</span></span>
+                </button>
+              ))}
+            </div>
+          )}
+          {res.count > res.leads.length && <p style={{ fontSize: 11.5, color: C.textFaint, marginTop: 5 }}>Showing {res.leads.length} of {res.count}.</p>}
+        </>
+      )}
+      {res.note && <p style={{ fontSize: 12.5, color: C.textMute, marginTop: 8, lineHeight: 1.5 }}>{res.note}</p>}
       {res.go && PAGE_LABEL[res.go] && (
         <button className="wb-ai-action" style={{ marginTop: 10 }} onClick={() => onGo(res.go)}>Open {PAGE_LABEL[res.go]} <ChevronRight size={13} /></button>
       )}

@@ -3,6 +3,8 @@
 // change a quote's total. Each helper looks at the raw message and either
 // returns an answer or null (so the price engine carries on).
 
+import { bucket, needsAction, missedAppPickup } from "../leads";
+
 const lc = (s) => String(s || "").toLowerCase();
 const cancelled = (o) => lc(o.order_status) === "cancelled";
 const delivered = (o) => lc(o.order_status) === "delivered" || o.delivery_status === "Delivered";
@@ -123,4 +125,56 @@ export function customerByName(raw, ctx) {
   if (people.length === 1) return { type: "customer", phone: people[0].phone, orders: people[0].orders };
   people.sort((a, b) => new Date(b.orders[0].created_at) - new Date(a.orders[0].created_at));
   return { type: "customers", name: m[1].trim(), people: people.slice(0, 6).map((g) => ({ name: g.name, phone: g.phone, count: g.orders.length, due: g.due })) };
+}
+
+/* ── Leads to call, and app orders whose pickup was missed ────────────── */
+
+// "how do I…" questions about leads are answered by the how-to rules instead.
+const RE_HOWTO = /\b(kaise|kese|kaisa|how|kya karu|kya kare|kya karna|kya hai|matlab|add|banaye|banana|dale|daale|cancel|delete|log karna|mark|kaha|kahan|kahaan|kidhar|where)\b/i;
+// "call" in Hindi script reads back as "kol" ("किसको कॉल करना है" → "kisako kol karanaa hai").
+const RE_LEADS = /\b(leads?|lead list|kis(a)? ?ko (call|kol)|kise (call|kol)|kinko (call|kol)|(call|kol) kar(a)?naa? (hai|h|he)|call list|callbacks?|call backs?|follow ?ups?|booked pickups?|pickups? booked|aaj ke pickups?|aaj ka pickup|pickups? aaj)\b/i;
+const RE_MISSED = /\b(missed pickups?|pickups? missed|pickup miss|pickup chhut|pickup chut|pickup nahi hua|missed app)\b/i;
+
+export function leadsIntent(raw, ctx) {
+  if (RE_HOWTO.test(raw)) return null;
+  const now = ctx.now || Date.now();
+  if (RE_MISSED.test(raw)) {
+    const list = (ctx.orders || []).filter((o) => missedAppPickup(o, now))
+      .sort((a, b) => String(a.due_date || "").localeCompare(String(b.due_date || "")));
+    return {
+      type: "stats", kind: "missed", title: "App orders with a missed pickup", count: list.length,
+      orders: list.slice(0, 8).map((o) => ({
+        id: o.id, label: o.order_label || String(o.order_no ?? ""), name: o.customer_name || "", due: o.due_date, total: Number(o.total || 0), balance: 0,
+        sub: `pickup was ${o.due_date ? new Date(`${String(o.due_date).slice(0, 10)}T00:00:00`).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) : "not set"}${o.pickup_slot ? " · " + o.pickup_slot : ""}`,
+        right: `₹${Number(o.total || 0).toLocaleString("en-IN")}`,
+      })),
+      note: list.length ? "Call each customer. Still want it: book the pickup again. No answer after 3 tries: Can't reach them (cancels the order)." : null,
+      go: "apporders",
+    };
+  }
+  if (!RE_LEADS.test(raw)) return null;
+  const leads = ctx.leads || [];
+  const by = (b) => leads.filter((l) => bucket(l, now) === b);
+  const toCall = by("call"), later = by("later"), booked = by("booked");
+  const end = new Date(now); end.setHours(23, 59, 59, 999);
+  const bookedToday = booked.filter((l) => l.pickup_at && new Date(l.pickup_at).getTime() <= end.getTime());
+  const missed = (ctx.orders || []).filter((o) => missedAppPickup(o, now)).length;
+  const due = leads.filter((l) => needsAction(l, now))
+    .sort((a, b) => new Date(a.status === "booked" ? a.pickup_at : (a.next_action_at || a.created_at)) - new Date(b.status === "booked" ? b.pickup_at : (b.next_action_at || b.created_at)));
+  const line = (l) => {
+    if (l.status === "booked") return `pickup ${new Date(l.pickup_at).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}`;
+    if (l.status === "new") return l.first_contact_at ? "reopened · call again" : "new · not called yet";
+    return `call again${l.attempts ? ` · ${l.attempts} tr${l.attempts === 1 ? "y" : "ies"} so far` : ""}`;
+  };
+  return {
+    type: "stats", kind: "leads", title: "Leads & Pickups", unit: "lead", count: due.length,
+    tiles: [
+      { k: "To call now", v: String(toCall.length), sub: `${toCall.filter((l) => l.status === "new").length} new` },
+      { k: "Call later", v: String(later.length), sub: "time set" },
+      { k: "Pickups today", v: String(bookedToday.length), sub: `${booked.length} booked in all` },
+      { k: "Missed app pickups", v: String(missed), sub: "call or cancel" },
+    ],
+    leads: due.slice(0, 8).map((l) => ({ id: l.id, name: l.name || "Name not known", phone: String(l.phone || "").replace(/\D/g, "").slice(-10), line: line(l), urgent: l.status !== "booked" })),
+    go: "leads",
+  };
 }
